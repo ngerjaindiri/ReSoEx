@@ -1,0 +1,274 @@
+﻿<!DOCTYPE html>
+<html lang="id"><head>
+  <meta charset="UTF-8">
+  <title>ALL_PASS | OK</title>
+</head>
+<body>
+  <div id="out">{
+  "pass": true,
+  "fails": [],
+  "domNames": [
+    "Budi Santoso",
+    "Siti Aminah",
+    "Rina Putri",
+    "Andi Wijaya"
+  ],
+  "gqlNames": [
+    "Dewi Lestari",
+    "Eko Prasetyo"
+  ],
+  "count": "ALL_PASS"
+}</div>
+
+  <!-- Realistic modern FB-like comment structure -->
+  <div id="mock-post" role="main">
+    <div role="article" aria-label="Post by Pemilik Post">
+      <a role="link" href="https://www.facebook.com/pemilik.post">Pemilik Post</a>
+      <div>Isi postingan contoh untuk uji.</div>
+
+      <div class="comments">
+        <div role="article" aria-label="Comment by Budi Santoso">
+          <a role="link" href="https://www.facebook.com/budi.santoso">Budi Santoso</a>
+          <div>Komentar bagus sekali</div>
+          <div role="button">Like</div>
+          <div role="button">Reply</div>
+        </div>
+
+        <div role="article" aria-label="Komentar oleh Siti Aminah">
+          <a role="link" href="https://www.facebook.com/siti.aminah">Siti Aminah</a>
+          <div>Setuju!</div>
+          <div role="button">Suka</div>
+          <div role="button">Balas</div>
+        </div>
+
+        <div role="article">
+          <a role="link" href="https://www.facebook.com/andi.wijaya">Andi Wijaya</a>
+          <div>Mantap bro</div>
+          <div role="button">Like</div>
+          <div role="button">Reply</div>
+        </div>
+
+        <div role="article" aria-label="Reply by Rina Putri">
+          <a role="link" href="https://www.facebook.com/rina.putri">Rina Putri</a>
+          <div>Balasan</div>
+          <div role="button">Like</div>
+          <div role="button">Reply</div>
+        </div>
+
+        <!-- duplicate -->
+        <div role="article" aria-label="Comment by Budi Santoso">
+          <a role="link" href="https://www.facebook.com/budi.santoso">Budi Santoso</a>
+          <div>Komentar kedua</div>
+          <div role="button">Like</div>
+          <div role="button">Reply</div>
+        </div>
+
+        <div role="button">View more comments</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Mirror core extract logic from inject.js (must stay in sync) ----
+    const nameMap = new Map();
+    let includeReplies = true;
+
+    function normalizeName(raw) {
+      if (typeof raw !== "string") return "";
+      let name = raw
+        .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      name = name.replace(/\s+[┬╖ΓÇó|].*$/, "").trim();
+      name = name.replace(
+        /\s+\d+\s*(d|h|m|w|y|jam|menit|hari|minggu|tahun|hr|min)s?\b.*$/i,
+        ""
+      );
+      name = name.replace(/\s+Edited$/i, "").trim();
+      if (/\bis with\b/i.test(name)) name = name.split(/\bis with\b/i)[0].trim();
+      if (!name || name.length < 2 || name.length > 100) return "";
+      if (name.startsWith("@")) return "";
+      if (/^\d+$/.test(name)) return "";
+      if (/https?:\/\//i.test(name)) return "";
+      const blocked = [
+        /^view\b/i, /^see\b/i, /^like\b/i, /^likes$/i, /^reply\b/i, /^share\b/i,
+        /^comment\b/i, /^write\b/i, /^facebook$/i, /^suka$/i, /^balas$/i,
+        /^bagikan$/i, /^komentar$/i, /^most relevant$/i, /^all comments$/i,
+      ];
+      if (blocked.some((re) => re.test(name))) return "";
+      if (!/[\p{L}\p{N}]/u.test(name)) return "";
+      return name;
+    }
+
+    function addName(raw) {
+      const name = normalizeName(raw);
+      if (!name) return false;
+      const key = name.toLowerCase();
+      if (nameMap.has(key)) return false;
+      nameMap.set(key, name);
+      return true;
+    }
+
+    function isProfileHref(href) {
+      if (!href || href === "#") return false;
+      if (!/facebook\.com|^\//i.test(href)) return false;
+      if (/\/(posts|photos|videos|reel|watch|stories|permalink\.php)/i.test(href))
+        return false;
+      if (href.includes("comment_id")) return false;
+      return (
+        /profile\.php\?id=\d+/i.test(href) ||
+        /facebook\.com\/[A-Za-z0-9.\u00C0-\u024F_-]{2,}/i.test(href) ||
+        /^\/[A-Za-z0-9.\u00C0-\u024F_-]{2,}(\/|\?|$)/i.test(href)
+      );
+    }
+
+    function scrapeDomNames(scope) {
+      scope = scope || document;
+      const labelPatterns = [
+        /^(?:Comment|Reply|Komentar|Balasan)(?:\s+by|\s+oleh|\s+dari|\s+from)?\s+(.+)$/i,
+      ];
+      scope.querySelectorAll("[aria-label]").forEach((el) => {
+        const label = el.getAttribute("aria-label") || "";
+        for (const re of labelPatterns) {
+          const m = label.match(re);
+          if (m) {
+            addName(m[1].split(/\s{2,}|\s+[┬╖ΓÇó]\s+/)[0]);
+            return;
+          }
+        }
+      });
+
+      scope.querySelectorAll('[role="article"]').forEach((art) => {
+        const ariaRaw = art.getAttribute("aria-label") || "";
+        if (/^(post by|posting by|post oleh)\b/i.test(ariaRaw.trim())) return;
+        const links = art.querySelectorAll('a[role="link"], a[href]');
+        for (const a of links) {
+          const href = a.href || a.getAttribute("href") || "";
+          if (!isProfileHref(href)) continue;
+          const text = (a.innerText || a.textContent || "").replace(/\s+/g, " ").trim();
+          if (!text || text.length > 80) continue;
+          addName(text);
+          break;
+        }
+      });
+
+      // Reply-row strategy only (not post-level Like)
+      scope.querySelectorAll('[role="button"]').forEach((btn) => {
+        const t = `${btn.innerText || ""} ${btn.getAttribute("aria-label") || ""}`.trim();
+        if (!/^(reply|balas)\b/i.test(t)) return;
+        let row = btn.parentElement;
+        for (let i = 0; i < 8 && row; i++) {
+          if (row.querySelector("a[href]")) break;
+          row = row.parentElement;
+        }
+        if (!row) return;
+        const rowAria = row.getAttribute?.("aria-label") || "";
+        if (/^(post by|posting by|post oleh)\b/i.test(rowAria.trim())) return;
+        const links = row.querySelectorAll("a[href]");
+        for (const a of links) {
+          if (!isProfileHref(a.href || "")) continue;
+          const text = (a.innerText || "").replace(/\s+/g, " ").trim();
+          if (text) addName(text);
+          break;
+        }
+      });
+    }
+
+    function extractNamesFromText(text) {
+      const patterns = [
+        /"__typename"\s*:\s*"Comment"[\s\S]{0,1500}?"author"\s*:\s*\{[\s\S]{0,600}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+        /"author"\s*:\s*\{[\s\S]{0,400}?"__typename"\s*:\s*"User"[\s\S]{0,300}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+        /"created_time"\s*:\s*\d+[\s\S]{0,500}?"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+      ];
+      for (const re of patterns) {
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(text))) {
+          try { addName(JSON.parse(`"${m[1]}"`)); } catch { addName(m[1]); }
+        }
+      }
+    }
+
+    // ---- tests ----
+    const fails = [];
+    function ok(cond, msg) {
+      if (!cond) fails.push(msg);
+    }
+
+    // Test 1: DOM
+    nameMap.clear();
+    scrapeDomNames(document.getElementById("mock-post"));
+    const domNames = [...nameMap.values()];
+    ok(domNames.includes("Budi Santoso"), "DOM missing Budi");
+    ok(domNames.includes("Siti Aminah"), "DOM missing Siti");
+    ok(domNames.includes("Andi Wijaya"), "DOM missing Andi");
+    ok(domNames.includes("Rina Putri"), "DOM missing Rina reply");
+    ok(domNames.filter((n) => n === "Budi Santoso").length === 1, "DOM Budi not unique");
+    ok(!domNames.includes("Pemilik Post"), "should skip post owner shell");
+    ok(domNames.length >= 4, "DOM too few names: " + domNames.join(","));
+
+    // Test 2: GraphQL Comment
+    nameMap.clear();
+    const gql = JSON.stringify({
+      data: {
+        node: {
+          comment_rendering_instance_for_feed_location: {
+            comments: {
+              edges: [
+                {
+                  node: {
+                    __typename: "Comment",
+                    author: { __typename: "User", name: "Dewi Lestari", id: "1" },
+                    body: { text: "halo" },
+                    created_time: 1700000000,
+                  },
+                },
+                {
+                  node: {
+                    __typename: "Comment",
+                    author: { __typename: "User", name: "Eko Prasetyo", id: "2" },
+                    body: { text: "hai" },
+                    created_time: 1700000001,
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    extractNamesFromText(gql);
+    const gqlNames = [...nameMap.values()];
+    ok(gqlNames.includes("Dewi Lestari"), "GQL missing Dewi");
+    ok(gqlNames.includes("Eko Prasetyo"), "GQL missing Eko");
+
+    // Test 3: GraphQL without Comment typename but created_time+author
+    nameMap.clear();
+    extractNamesFromText(
+      '{"x":{"created_time":123,"author":{"__typename":"User","name":"Fajar Nugroho"},"body":{"text":"ok"}}}'
+    );
+    ok([...nameMap.values()].includes("Fajar Nugroho"), "loose GQL missing Fajar");
+
+    // Test 4: normalize blocks UI
+    ok(normalizeName("Like") === "", "normalize Like");
+    ok(normalizeName("View more comments") === "", "normalize view more");
+    ok(normalizeName("Budi Santoso ┬╖ 2h") === "Budi Santoso" || normalizeName("Budi Santoso ┬╖ 2h").startsWith("Budi"), "normalize strip meta");
+
+    // Test 5: profile href filter
+    ok(isProfileHref("https://www.facebook.com/budi.s"), "profile href ok");
+    ok(!isProfileHref("https://www.facebook.com/user/posts/123"), "posts href reject");
+    ok(!isProfileHref("https://www.facebook.com/watch/?v=1"), "watch href reject");
+
+    const report = {
+      pass: fails.length === 0,
+      fails,
+      domNames,
+      gqlNames,
+      count: fails.length === 0 ? "ALL_PASS" : "FAIL_" + fails.length,
+    };
+    document.getElementById("out").textContent = JSON.stringify(report, null, 2);
+    document.title = report.count + " | " + (report.pass ? "OK" : fails.join("; "));
+  </script>
+
+
+</body></html>

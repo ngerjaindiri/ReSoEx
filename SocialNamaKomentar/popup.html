@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReSo Ekstention</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <img class="logo" id="logoIcon" src="logo.svg" alt="ReSo" />
+        <div>
+          <h1 id="headerTitle">ReSo Ekstention</h1>
+          <p class="sub" id="headerSub">Nama komentator → copy ke Excel</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- Platform indicator -->
+      <div id="platformBadge" class="platform-badge">Mendeteksi platform…</div>
+
+      <section class="card">
+        <div id="status" class="status">Memuat…</div>
+        <div id="hint" class="hint"></div>
+        <!-- TikTok-only: API badge -->
+        <div id="apiBadge" class="api-badge" hidden>API: …</div>
+        <div id="count" class="count">0 nama</div>
+        <pre id="preview" class="preview" hidden></pre>
+      </section>
+
+      <label class="check">
+        <input id="includeReplies" type="checkbox" />
+        Sertakan balasan (reply)
+      </label>
+
+      <section class="actions">
+        <button id="btnProcess" class="btn primary" type="button">Proses</button>
+        <button id="btnStop" class="btn" type="button" hidden>Stop</button>
+        <button id="btnCopy" class="btn success" type="button" disabled>Copy nama</button>
+        <button id="btnReset" class="btn ghost" type="button">Reset</button>
+      </section>
+
+      <!-- Facebook steps -->
+      <ol id="stepsFb" class="steps" hidden>
+        <li>Buka <b>1 postingan</b> (permalink), jangan home feed.</li>
+        <li>Pastikan komentar terlihat, lalu <b>Proses</b>.</li>
+        <li>Tunggu selesai / partial, lalu <b>Copy nama</b>.</li>
+        <li>Paste di Excel — 1 nama per baris ke bawah.</li>
+      </ol>
+
+      <!-- TikTok steps -->
+      <ol id="stepsTt" class="steps" hidden>
+        <li>Buka <b>1 video</b> TikTok (URL <code>/video/…</code>).</li>
+        <li>Klik ikon <b>komentar</b> sampai list muncul.</li>
+        <li>Badge <b>API siap</b> → klik <b>Proses</b>.</li>
+        <li><b>Copy nama</b> → paste Excel (1 baris ke bawah).</li>
+      </ol>
+
+      <!-- Unknown platform -->
+      <div id="noSupport" class="steps" hidden>
+        <p>⚠️ Buka tab <b>Facebook</b> atau <b>TikTok</b> untuk mulai.</p>
+      </div>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

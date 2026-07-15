@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TikTok Nama Komentar</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <span class="logo">T</span>
+        <div>
+          <h1>TikTok Nama Komentar</h1>
+          <p class="sub">Nickname komentator → copy Excel</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <section class="card">
+        <div id="status" class="status">Memuat…</div>
+        <div id="hint" class="hint"></div>
+        <div id="badge" class="badge">API: …</div>
+        <div id="count" class="count">0 nama</div>
+        <pre id="preview" class="preview" hidden></pre>
+      </section>
+
+      <label class="check">
+        <input id="includeReplies" type="checkbox" />
+        Sertakan balasan (reply)
+      </label>
+
+      <section class="actions">
+        <button id="btnProcess" class="btn primary" type="button">Proses</button>
+        <button id="btnStop" class="btn" type="button" hidden>Stop</button>
+        <button id="btnCopy" class="btn success" type="button" disabled>Copy nama</button>
+        <button id="btnReset" class="btn ghost" type="button">Reset</button>
+      </section>
+
+      <ol class="steps">
+        <li>Buka <b>1 video</b> TikTok (URL <code>/video/…</code>).</li>
+        <li>Klik ikon <b>komentar</b> sampai list muncul.</li>
+        <li>Badge <b>API siap</b> → klik <b>Proses</b>.</li>
+        <li><b>Copy nama</b> → paste Excel (1 baris ke bawah).</li>
+      </ol>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
