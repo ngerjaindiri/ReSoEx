@@ -25,8 +25,11 @@ const stepsTt = $("stepsTt");
 const noSupport = $("noSupport");
 
 let currentPlatform = null;
+/** When true, do not overwrite checkbox from state (user is editing). */
+let repliesDirty = false;
 
 function setPlatformUI(platform) {
+  const platformChanged = platform !== currentPlatform;
   currentPlatform = platform;
   document.body.dataset.platform = platform || "";
 
@@ -38,7 +41,12 @@ function setPlatformUI(platform) {
     stepsTt.hidden = true;
     noSupport.hidden = true;
     apiBadgeEl.hidden = true;
-    includeRepliesEl.checked = true;
+    // Only reset replies when switching platforms
+    if (platformChanged) {
+      includeRepliesEl.checked = true;
+      repliesDirty = false;
+    }
+    if (currentPlatform) btnProcess.disabled = false;
   } else if (platform === "tiktok") {
     platformBadge.textContent = "🎵 TikTok";
     headerTitle.textContent = "ReSo Ekstention";
@@ -47,7 +55,11 @@ function setPlatformUI(platform) {
     stepsTt.hidden = false;
     noSupport.hidden = true;
     apiBadgeEl.hidden = false;
-    includeRepliesEl.checked = false;
+    if (platformChanged) {
+      includeRepliesEl.checked = false;
+      repliesDirty = false;
+    }
+    if (currentPlatform) btnProcess.disabled = false;
   } else {
     platformBadge.textContent = "⚠️ Platform tidak didukung";
     headerTitle.textContent = "ReSo Ekstention";
@@ -61,13 +73,29 @@ function setPlatformUI(platform) {
 }
 
 function render(state, platform) {
-  if (!state) return;
-  if (platform) setPlatformUI(platform);
+  // platform may be null when tab is not FB/TT
+  if (platform !== undefined) setPlatformUI(platform);
+  if (!state) {
+    statusEl.textContent =
+      platform === null || platform === undefined
+        ? "Buka tab Facebook atau TikTok untuk mulai."
+        : "Memuat…";
+    hintEl.textContent = "";
+    countEl.textContent = "0 nama";
+    previewEl.hidden = true;
+    previewEl.textContent = "";
+    btnStop.hidden = true;
+    btnCopy.disabled = true;
+    btnCopy.textContent = "Copy nama";
+    if (apiBadgeEl) apiBadgeEl.hidden = true;
+    document.body.dataset.status = "idle";
+    return;
+  }
 
   statusEl.textContent = state.message || "";
 
   // Hint
-  if (platform === "tiktok") {
+  if (platform === "tiktok" || currentPlatform === "tiktok") {
     hintEl.textContent = state.videoHint
       ? `Video: ${state.videoHint}`
       : "Target: tab TikTok aktif";
@@ -90,8 +118,8 @@ function render(state, platform) {
   const n = state.count ?? (state.names || []).length;
   countEl.textContent = `${n} nama`;
 
-  // Include replies
-  if (typeof state.includeReplies === "boolean") {
+  // Include replies — only sync from state if user hasn't toggled locally
+  if (!repliesDirty && typeof state.includeReplies === "boolean") {
     includeRepliesEl.checked = state.includeReplies;
   }
 
@@ -157,12 +185,19 @@ async function init() {
 
 btnProcess.addEventListener("click", async () => {
   btnProcess.disabled = true;
-  const res = await chrome.runtime.sendMessage({
-    type: "START_FROM_POPUP",
-    includeReplies: includeRepliesEl.checked,
-  });
-  if (res?.state) render(res.state, currentPlatform);
-  if (res?.error) statusEl.textContent = res.state?.message || res.error;
+  try {
+    const res = await chrome.runtime.sendMessage({
+      type: "START_FROM_POPUP",
+      includeReplies: includeRepliesEl.checked,
+    });
+    if (res?.state) render(res.state, currentPlatform);
+    if (res?.error) {
+      statusEl.textContent =
+        res.message || res.state?.message || res.error;
+    }
+  } catch (e) {
+    statusEl.textContent = String(e?.message || e);
+  }
   await refresh();
 });
 
@@ -171,15 +206,27 @@ btnStop.addEventListener("click", async () => {
   await refresh();
 });
 
+includeRepliesEl.addEventListener("change", () => {
+  repliesDirty = true;
+  // Persist preference so poll/refresh does not fight the user
+  chrome.runtime
+    .sendMessage({
+      type: "SET_STATE",
+      patch: { includeReplies: includeRepliesEl.checked },
+    })
+    .catch(() => {});
+});
+
 btnCopy.addEventListener("click", async () => {
   const res = await getState();
   const state = res?.state;
   const platform = res?.platform;
   const text = namesToClipboardText(state?.names || [], platform);
   if (!text) return;
+  const copiedCount = text.split("\n").filter(Boolean).length;
   try {
     await navigator.clipboard.writeText(text);
-    statusEl.textContent = `Tersalin ${state.names.length} nama. Paste di Excel (Ctrl+V).`;
+    statusEl.textContent = `Tersalin ${copiedCount} nama. Paste di Excel (Ctrl+V).`;
   } catch {
     const [tab] = await chrome.tabs.query({
       active: true,
@@ -199,8 +246,9 @@ btnCopy.addEventListener("click", async () => {
 });
 
 btnReset.addEventListener("click", async () => {
+  repliesDirty = false;
   const res = await chrome.runtime.sendMessage({ type: "RESET" });
-  render(res?.state, currentPlatform);
+  render(res?.state, currentPlatform ?? res?.platform);
 });
 
 // Listen for state changes from both platforms

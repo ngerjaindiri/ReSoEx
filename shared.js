@@ -175,9 +175,13 @@ export function newRunId() {
   return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
 }
 
+/**
+ * Reject progress/done from a different run, or messages missing runId
+ * while a run is already active.
+ */
 export function isStaleRun(stateRunId, msgRunId) {
-  if (!msgRunId) return false;
   if (!stateRunId) return false;
+  if (!msgRunId) return true;
   return stateRunId !== msgRunId;
 }
 
@@ -186,10 +190,12 @@ export function isStaleRun(stateRunId, msgRunId) {
 // Facebook
 export const STORAGE_KEY_FB = "fnk_state";
 
-// TikTok
+// TikTok — template lives in session storage (not permanent local)
 export const STORAGE_KEY_TT = "tnk_state";
 export const URL_TEMPLATE_KEY = "tnk_comment_url";
 export const URL_META_KEY = "tnk_comment_meta";
+/** Max age for a captured comment-list URL template */
+export const TEMPLATE_TTL_MS = 45 * 60 * 1000;
 
 /**
  * Get the storage key for a platform.
@@ -197,6 +203,55 @@ export const URL_META_KEY = "tnk_comment_meta";
  */
 export function storageKeyFor(platform) {
   return platform === "tiktok" ? STORAGE_KEY_TT : STORAGE_KEY_FB;
+}
+
+/**
+ * Strip short-lived signing params before persisting a TikTok API URL.
+ * @param {string} url
+ * @returns {string|null}
+ */
+export function sanitizeTikTokTemplateUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  try {
+    const u = new URL(url);
+    for (const key of [
+      "msToken",
+      "X-Bogus",
+      "X-Gnarly",
+      "X-Dynosaur",
+      "_signature",
+      "signature",
+    ]) {
+      u.searchParams.delete(key);
+    }
+    return u.toString();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Validate a stored TikTok comment API template.
+ * @param {string|null|undefined} url
+ * @param {{capturedAt?: number, awemeId?: string|null}|null|undefined} meta
+ * @param {string|null} [requiredAwemeId] if set, meta.awemeId must match when present
+ * @returns {boolean}
+ */
+export function isTikTokTemplateValid(url, meta, requiredAwemeId = null) {
+  if (!url || typeof url !== "string") return false;
+  if (!url.toLowerCase().includes("tiktok.com/api/comment/list")) return false;
+  if (url.toLowerCase().includes("tiktok.com/api/comment/list/reply")) return false;
+  const capturedAt = meta?.capturedAt;
+  if (!capturedAt || typeof capturedAt !== "number") return false;
+  if (Date.now() - capturedAt > TEMPLATE_TTL_MS) return false;
+  if (
+    requiredAwemeId &&
+    meta?.awemeId &&
+    String(meta.awemeId) !== String(requiredAwemeId)
+  ) {
+    return false;
+  }
+  return true;
 }
 
 // ===================== Default State =====================

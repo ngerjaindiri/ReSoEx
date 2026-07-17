@@ -4,13 +4,15 @@
  */
 (function () {
   const SOURCE = "tt-nama-komentar-inject";
-  const TARGET = "tt-nama-komentar-content";
 
   if (window.__TNK_ENGINE__) {
-    window.postMessage({ source: SOURCE, type: "READY", version: 1 }, "*");
+    // Engine already live; ENGINE_CMD uses non-enumerable __RESO_TNK__
     return;
   }
   window.__TNK_ENGINE__ = true;
+
+  /** Captured / provided comment-list URL template (closure only) */
+  let engineTemplateUrl = null;
 
   /** @type {Map<string, string>} */
   const nameMap = new Map();
@@ -21,6 +23,7 @@
   let activeAwemeId = null;
   let currentRunId = null;
 
+  /** Data-plane only. Control plane is ENGINE_CMD via executeScript. */
   function post(type, payload = {}) {
     window.postMessage(
       { source: SOURCE, type, runId: currentRunId, ...payload },
@@ -93,16 +96,19 @@
           if (!c || typeof c !== "object") continue;
           takeUser(c.user);
           if (typeof c.nickname === "string") addName(c.nickname);
-          const replies = c.reply_comment || c.reply_comments || c.comments;
-          if (Array.isArray(replies)) {
-            for (const r of replies) takeUser(r?.user);
+          // Only pull embedded replies when the user opted in
+          if (includeReplies) {
+            const replies = c.reply_comment || c.reply_comments || c.comments;
+            if (Array.isArray(replies)) {
+              for (const r of replies) takeUser(r?.user);
+            }
           }
         }
       }
       return;
     }
 
-    // Fallback: only comment-shaped nodes
+    // Fallback: only comment-shaped nodes (top-level shape; avoid deep reply trees when off)
     const walk = (v, depth = 0) => {
       if (depth > 28 || v == null) return;
       if (Array.isArray(v)) {
@@ -118,7 +124,16 @@
           v.create_time != null ||
           v.digg_count != null);
       if (looksComment) takeUser(v.user);
-      for (const k of Object.keys(v)) walk(v[k], depth + 1);
+      for (const k of Object.keys(v)) {
+        // Skip nested reply arrays when replies disabled
+        if (
+          !includeReplies &&
+          (k === "reply_comment" || k === "reply_comments")
+        ) {
+          continue;
+        }
+        walk(v[k], depth + 1);
+      }
     };
     walk(data);
   }
@@ -496,7 +511,7 @@
       scrapeDomNicknames();
       await sleep(500);
 
-      let templateUrl = options.templateUrl || window.__TNK_TEMPLATE__ || null;
+      let templateUrl = options.templateUrl || engineTemplateUrl || null;
 
       // Poll for template after opening comments (background may capture mid-flight)
       if (!templateUrl) {
@@ -504,7 +519,7 @@
         for (let i = 0; i < 24 && !stopFlag; i++) {
           await sleep(250);
           scrapeDomNicknames();
-          templateUrl = window.__TNK_TEMPLATE__ || null;
+          templateUrl = engineTemplateUrl || null;
           if (templateUrl) break;
           if (i % 4 === 3) {
             post("PROGRESS", {
@@ -565,7 +580,7 @@
         return;
       }
 
-      window.__TNK_TEMPLATE__ = templateUrl;
+      engineTemplateUrl = templateUrl;
       const reason = await paginateList(
         templateUrl,
         activeAwemeId,
@@ -598,28 +613,39 @@
     stopFlag = true;
   }
 
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    const data = event.data;
-    if (!data || data.source !== TARGET) return;
-    if (data.type === "START") {
-      if (data.options?.templateUrl) {
-        window.__TNK_TEMPLATE__ = data.options.templateUrl;
-      }
-      runExtract(data.options || {});
-    }
-    if (data.type === "STOP") stopExtract();
-    if (data.type === "PING_ENGINE") post("READY", { version: 1 });
-    if (data.type === "SET_TEMPLATE") {
-      window.__TNK_TEMPLATE__ = data.templateUrl || null;
-    }
-  });
+  function setTemplate(url) {
+    engineTemplateUrl = url || null;
+  }
 
-  window.__TNK__ = {
-    start: runExtract,
-    stop: stopExtract,
-    snap: snapshot,
-  };
+  try {
+    Object.defineProperty(window, "__RESO_TNK__", {
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: Object.freeze({
+        version: 1,
+        start: (opts) => {
+          if (opts?.templateUrl) engineTemplateUrl = opts.templateUrl;
+          runExtract(opts || {});
+        },
+        stop: () => {
+          stopExtract();
+        },
+        setTemplate: (url) => {
+          setTemplate(url);
+        },
+        ping: () => ({ ok: true, version: 1, running }),
+      }),
+    });
+  } catch {
+    window.__RESO_TNK__ = {
+      version: 1,
+      start: runExtract,
+      stop: stopExtract,
+      setTemplate,
+      ping: () => ({ ok: true, version: 1, running }),
+    };
+  }
 
   post("READY", { version: 1 });
 })();

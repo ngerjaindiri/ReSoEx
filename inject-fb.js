@@ -1,5 +1,5 @@
 /**
- * MAIN-world engine — FB Nama Komentar v1.4
+ * MAIN-world engine — FB Nama Komentar v1.5
  * Mesin GraphQL pagination aktif (setara store-grade), output hanya nama.
  *
  * Primary: capture Facebook /api/graphql comment requests → replay with cursor
@@ -7,11 +7,10 @@
  */
 (function () {
   const SOURCE = "fb-nama-komentar-inject";
-  const TARGET = "fb-nama-komentar-content";
-  const VERSION = 4;
+  const VERSION = 6;
 
   if (window.__FNK_ENGINE__) {
-    window.postMessage({ source: SOURCE, type: "READY", version: VERSION }, "*");
+    // Engine already live; ENGINE_CMD uses non-enumerable __RESO_FNK__
     return;
   }
   window.__FNK_ENGINE__ = true;
@@ -41,6 +40,7 @@
   let postRoot = null;
   let engineMode = "idle"; // graphql | hybrid | dom
 
+  /** Data-plane only (PROGRESS/DONE/ERROR). Control plane is ENGINE_CMD via executeScript. */
   function post(type, payload = {}) {
     window.postMessage(
       { source: SOURCE, type, runId: currentRunId, ...payload },
@@ -1031,6 +1031,7 @@
     currentRunId = myRunId;
     includeReplies = options.includeReplies !== false;
     engineMode = "hybrid";
+    options._startedAt = Date.now();
     postRoot = findPostRoot();
     if (postRoot) {
       try {
@@ -1081,11 +1082,16 @@
       }
 
       const maxMs = options.maxMs || 150_000;
+      const startedAt = options._startedAt || Date.now();
       let finalReason = "idle";
+
+      // Reserve time for DOM harvest so GraphQL cannot consume the entire budget
+      const reserveDomMs = 12_000;
+      const gqlBudget = Math.max(20_000, maxMs - reserveDomMs);
 
       // 3) Primary: GraphQL pagination (ESuit-like)
       if (gqlTemplates.size > 0 && !stopFlag) {
-        const g = await paginateGraphql(maxMs);
+        const g = await paginateGraphql(gqlBudget);
         finalReason = g.reason || "complete";
         engineMode = g.mode === "graphql" ? "graphql" : engineMode;
         if (g.error) {
@@ -1097,18 +1103,28 @@
         }
       }
 
-      // 4) Secondary: DOM expand if few names
-      if (!stopFlag && nameMap.size < 5) {
-        engineMode = nameMap.size ? "hybrid" : "dom";
-        post("PROGRESS", {
-          names: snapshot(),
-          message: `Melengkapi lewat DOM… (${nameMap.size} nama)`,
-          postHint: "dom",
-        });
-        const domReason = await expandDomLoop(
-          Math.min(60_000, maxMs - 1000)
-        );
-        if (nameMap.size > 0) finalReason = domReason;
+      // 4) Secondary: always brief DOM harvest; longer if GraphQL yielded little
+      if (!stopFlag) {
+        const remaining = Math.max(0, maxMs - (Date.now() - startedAt));
+        const needDeep = nameMap.size < 8;
+        const domBudget = needDeep
+          ? Math.min(60_000, remaining)
+          : Math.min(12_000, remaining);
+        if (domBudget >= 1500) {
+          engineMode =
+            gqlTemplates.size > 0 && nameMap.size > 0
+              ? "hybrid"
+              : nameMap.size
+                ? "hybrid"
+                : "dom";
+          post("PROGRESS", {
+            names: snapshot(),
+            message: `Melengkapi lewat DOM… (${nameMap.size} nama)`,
+            postHint: "dom",
+          });
+          const domReason = await expandDomLoop(domBudget);
+          if (nameMap.size > 0) finalReason = domReason;
+        }
       }
 
       // 5) Final harvest
@@ -1156,32 +1172,32 @@
     stopFlag = true;
   }
 
-  window.addEventListener("message", (event) => {
-    if (event.source !== window) return;
-    const data = event.data;
-    if (!data || data.source !== TARGET) return;
-    if (data.type === "START") runExtract(data.options || {});
-    if (data.type === "STOP") stopExtract();
-    if (data.type === "PING_ENGINE") post("READY", { version: VERSION });
-  });
-
-  window.__FNK__ = {
-    version: VERSION,
-    start: runExtract,
-    stop: stopExtract,
-    scrape: () => {
-      scrapeDomNames(document);
-      drainGqlBuffer();
-      return snapshot();
-    },
-    bufferSize: () => gqlBuffer.length,
-    templates: () =>
-      [...gqlTemplates.entries()].map(([k, v]) => ({
-        key: k,
-        friendly: v.friendlyName,
-        at: v.capturedAt,
-      })),
-  };
+  // Control plane: non-enumerable API for background executeScript only.
+  // Page scripts can still discover it (MAIN world limit) — not via postMessage.
+  try {
+    Object.defineProperty(window, "__RESO_FNK__", {
+      configurable: true,
+      enumerable: false,
+      writable: false,
+      value: Object.freeze({
+        version: VERSION,
+        start: (opts) => {
+          runExtract(opts || {});
+        },
+        stop: () => {
+          stopExtract();
+        },
+        ping: () => ({ ok: true, version: VERSION, running }),
+      }),
+    });
+  } catch {
+    window.__RESO_FNK__ = {
+      version: VERSION,
+      start: runExtract,
+      stop: stopExtract,
+      ping: () => ({ ok: true, version: VERSION, running }),
+    };
+  }
 
   post("READY", { version: VERSION });
 })();

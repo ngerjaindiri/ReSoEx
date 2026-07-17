@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ReSo Ekstention",
   "description": "Ambil nama komentator dari Facebook & TikTok, lalu salin ke Excel. Satu extension untuk semua platform.",
-  "version": "1.0.0",
+  "version": "1.0.5",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -26,6 +26,8 @@
     "https://www.facebook.com/*",
     "https://web.facebook.com/*",
     "https://m.facebook.com/*",
+    "https://facebook.com/*",
+    "*://*.facebook.com/*",
     "*://*.tiktok.com/*"
   ],
   "content_scripts": [
@@ -33,7 +35,9 @@
       "matches": [
         "https://www.facebook.com/*",
         "https://web.facebook.com/*",
-        "https://m.facebook.com/*"
+        "https://m.facebook.com/*",
+        "https://facebook.com/*",
+        "*://*.facebook.com/*"
       ],
       "js": ["content-fb.js"],
       "css": ["content-fb.css"],

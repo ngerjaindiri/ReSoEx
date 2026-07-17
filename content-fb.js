@@ -6,7 +6,6 @@
   window.__FNK_CONTENT__ = true;
 
   const INJECT_SOURCE = "fb-nama-komentar-inject";
-  const CONTENT_SOURCE = "fb-nama-komentar-content";
   const ROOT_ID = "fnk-root";
 
   let ui = null;
@@ -29,41 +28,56 @@
     }
   }
 
-  function postToInject(type, extra = {}) {
-    window.postMessage({ source: CONTENT_SOURCE, type, ...extra }, "*");
+  async function engineCmd(cmd, options = {}) {
+    return sendBg("ENGINE_CMD", { cmd, options });
   }
 
-  function waitEngineReady(timeoutMs = 4000) {
-    if (engineReady) return Promise.resolve(true);
-    return new Promise(async (resolve) => {
-      const timer = setTimeout(() => {
-        readyWaiter = null;
-        resolve(false);
-      }, timeoutMs);
-      readyWaiter = (ok) => {
-        clearTimeout(timer);
-        readyWaiter = null;
-        resolve(ok);
-      };
+  function acceptFromInject(data) {
+    if (!data || data.source !== INJECT_SOURCE) return false;
+    // Data plane only — control is ENGINE_CMD (no shared secrets in postMessage)
+    const t = data.type;
+    return (
+      t === "READY" ||
+      t === "PROGRESS" ||
+      t === "DONE" ||
+      t === "ERROR"
+    );
+  }
+
+  async function waitEngineReady(timeoutMs = 5000) {
+    if (engineReady) return true;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
       await sendBg("INJECT_MAIN");
-      postToInject("PING_ENGINE");
-      // retry pings
-      let n = 0;
-      const iv = setInterval(() => {
-        n++;
-        postToInject("PING_ENGINE");
-        sendBg("INJECT_MAIN");
-        if (n >= 8 || engineReady) clearInterval(iv);
-      }, 200);
-    });
+      const res = await engineCmd("PING");
+      if (res?.ok) {
+        engineReady = true;
+        if (readyWaiter) readyWaiter(true);
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return engineReady;
   }
 
   function mergeNames(list) {
     const map = new Map();
+    const blocked =
+      /^(view|see|like|likes|reply|share|comment|facebook|meta|suka|balas|bagikan|komentar|lihat|semua|edited|photo|video|reels?)$/i;
     for (const n of list || []) {
       if (typeof n !== "string") continue;
-      const k = n.replace(/\u200b|\u200c|\u200d|\ufeff/g, "").replace(/\s+/g, " ").trim();
-      if (k.length >= 2) map.set(k.toLowerCase(), k);
+      let k = n
+        .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
+      k = k
+        .replace(/\s+[·•|].*$/, "")
+        .replace(/\s+\d+\s*(d|h|m|w|jam|menit|hari)\b.*$/i, "")
+        .trim();
+      if (k.length < 2 || k.length > 100) continue;
+      if (/^\d+$/.test(k) || /^@/.test(k) || /https?:\/\//i.test(k)) continue;
+      if (blocked.test(k)) continue;
+      map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
   }
@@ -81,18 +95,30 @@
     return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
   }
 
+  /** Bumps on every start/stop so superseded async starts abort cleanly */
+  let startGen = 0;
+
   async function startExtract(opts = {}) {
+    const gen = ++startGen;
     if (stopFinalizeTimer) {
       clearTimeout(stopFinalizeTimer);
       stopFinalizeTimer = null;
     }
+    if (status === "running") {
+      await engineCmd("STOP");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    // A newer start/stop superseded this one
+    if (gen !== startGen) return;
+
     currentRunId = opts.runId || makeRunId();
     setLocalState({
       status: "running",
       names: [],
       message: "Menyiapkan engine…",
     });
-    await sendBg("SET_STATE", {
+    // tabId stamped by background from sender.tab
+    const stRes = await sendBg("SET_STATE", {
       patch: {
         status: "running",
         names: [],
@@ -103,31 +129,69 @@
         runId: currentRunId,
       },
     });
+    if (gen !== startGen) return;
+    if (stRes && stRes.ok === false) {
+      setLocalState({
+        status: "error",
+        message:
+          stRes.error === "Run active on another tab"
+            ? "Sudah ada proses di tab lain. Stop dulu di tab itu, lalu coba lagi."
+            : "Gagal memulai. Coba lagi.",
+      });
+      return;
+    }
 
     const ok = await waitEngineReady(5000);
-    if (!ok && !engineReady) {
-      await sendBg("INJECT_MAIN");
-      await new Promise((r) => setTimeout(r, 300));
+    if (gen !== startGen) return;
+    if (!ok) {
+      setLocalState({
+        status: "error",
+        message:
+          "Engine belum siap. Refresh halaman Facebook, lalu coba lagi.",
+      });
+      await sendBg("NAMES_ERROR", {
+        message: "Engine belum siap.",
+        runId: currentRunId,
+      });
+      return;
     }
 
     markBestPostRoot();
     setLocalState({ message: "Memulai ekstrak…" });
-    postToInject("START", {
-      options: {
-        maxMs: 150_000,
-        includeReplies,
-        runId: currentRunId,
-      },
+    const started = await engineCmd("START", {
+      maxMs: 150_000,
+      includeReplies,
+      runId: currentRunId,
     });
+    if (gen !== startGen) return;
+    if (!started?.ok) {
+      setLocalState({
+        status: "error",
+        message:
+          started?.error === "Run active on another tab — stop it first"
+            ? "Sudah ada proses di tab lain. Stop dulu, lalu coba lagi."
+            : "Gagal memulai engine. Refresh postingan lalu coba lagi.",
+      });
+      await sendBg("NAMES_ERROR", {
+        message: started?.error || "START failed",
+        runId: currentRunId,
+      });
+      // Ensure MAIN engine is not left half-started
+      await engineCmd("STOP");
+    }
   }
 
   function stopExtract() {
-    postToInject("STOP");
+    // Invalidate any in-flight startExtract
+    startGen += 1;
+    engineCmd("STOP");
     setLocalState({ status: "running", message: "Menghentikan…" });
     // Finalize if inject never answers
     if (stopFinalizeTimer) clearTimeout(stopFinalizeTimer);
+    const stopRunId = currentRunId;
     stopFinalizeTimer = setTimeout(() => {
       if (status !== "running") return;
+      if (currentRunId !== stopRunId) return;
       const list = names.slice();
       setLocalState({
         status: list.length ? "stopped" : "error",
@@ -138,7 +202,7 @@
       sendBg("NAMES_DONE", {
         names: list,
         stopReason: "stopped",
-        runId: currentRunId,
+        runId: stopRunId,
         postHint,
       });
     }, 2800);
@@ -511,36 +575,48 @@
     return count ? "done" : "error";
   }
 
+  /**
+   * Strict run match — reject spoofed/idle inject events.
+   * READY is handled separately (no runId).
+   */
   function isCurrentRun(runId) {
-    if (!runId || !currentRunId) return true;
+    if (!currentRunId) return false;
+    if (typeof runId !== "string" || !runId) return false;
     return runId === currentRunId;
   }
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
-    if (!data || data.source !== INJECT_SOURCE) return;
+    if (!acceptFromInject(data)) return;
 
     if (data.type === "READY") {
       engineReady = true;
       if (readyWaiter) readyWaiter(true);
+      return;
     }
 
     if (data.type === "PROGRESS") {
+      if (status !== "running") return;
       if (!isCurrentRun(data.runId)) return;
+      const list = Array.isArray(data.names) ? data.names : [];
       setLocalState({
         status: "running",
-        names: data.names || [],
+        names: list,
         message:
-          data.message || `Mengumpulkan… ${(data.names || []).length} nama`,
-        postHint: data.postHint || postHint,
+          typeof data.message === "string"
+            ? data.message
+            : `Mengumpulkan… ${list.length} nama`,
+        postHint:
+          typeof data.postHint === "string" ? data.postHint : postHint,
       });
       sendBg("NAMES_PROGRESS", {
-        names: data.names || [],
+        names: list,
         message: data.message,
         postHint: data.postHint,
         runId: currentRunId,
       });
+      return;
     }
 
     if (data.type === "DONE") {
@@ -549,8 +625,9 @@
         clearTimeout(stopFinalizeTimer);
         stopFinalizeTimer = null;
       }
-      const list = data.names || [];
-      const stopReason = data.stopReason || "complete";
+      const list = Array.isArray(data.names) ? data.names : [];
+      const stopReason =
+        typeof data.stopReason === "string" ? data.stopReason : "complete";
       const st = mapDoneStatus(stopReason, list.length);
       const localMsg = (() => {
         const c = list.length;
@@ -580,7 +657,8 @@
         status: st,
         names: list,
         message: finalMsg,
-        postHint: data.postHint || postHint,
+        postHint:
+          typeof data.postHint === "string" ? data.postHint : postHint,
       });
       sendBg("NAMES_DONE", {
         names: list,
@@ -588,6 +666,7 @@
         postHint: data.postHint,
         runId: currentRunId,
       });
+      return;
     }
 
     if (data.type === "ERROR") {
@@ -598,7 +677,8 @@
       }
       setLocalState({
         status: "error",
-        message: data.message || "Error",
+        message:
+          typeof data.message === "string" ? data.message : "Error",
       });
       sendBg("NAMES_ERROR", { message: data.message, runId: currentRunId });
     }
@@ -632,19 +712,20 @@
 
   function boot() {
     placeUi();
-    sendBg("INJECT_MAIN").then(() => postToInject("PING_ENGINE"));
+    sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
+      if (r?.ok) engineReady = true;
+    });
 
     let lastHref = location.href;
     setInterval(() => {
       if (location.href !== lastHref) {
         lastHref = location.href;
-        engineReady = false;
         if (stopFinalizeTimer) {
           clearTimeout(stopFinalizeTimer);
           stopFinalizeTimer = null;
         }
-        // Abort in-page engine so it cannot keep writing stale results
-        postToInject("STOP");
+        engineCmd("STOP");
+        engineReady = false;
         currentRunId = null;
         setLocalState({
           status: "idle",
@@ -663,7 +744,9 @@
             runId: null,
           },
         });
-        sendBg("INJECT_MAIN");
+        sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
+          if (r?.ok) engineReady = true;
+        });
       }
       if (!document.getElementById(ROOT_ID)) placeUi();
       else placeInlineBar();

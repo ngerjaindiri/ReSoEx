@@ -6,7 +6,6 @@
   window.__TNK_CONTENT__ = true;
 
   const INJECT_SOURCE = "tt-nama-komentar-inject";
-  const CONTENT_SOURCE = "tt-nama-komentar-content";
   const ROOT_ID = "tnk-root";
 
   let ui = null;
@@ -29,41 +28,53 @@
     }
   }
 
-  function postToInject(type, extra = {}) {
-    window.postMessage({ source: CONTENT_SOURCE, type, ...extra }, "*");
+  async function engineCmd(cmd, options = {}) {
+    return sendBg("ENGINE_CMD", { cmd, options });
+  }
+
+  function acceptFromInject(data) {
+    if (!data || data.source !== INJECT_SOURCE) return false;
+    const t = data.type;
+    return (
+      t === "READY" ||
+      t === "PROGRESS" ||
+      t === "DONE" ||
+      t === "ERROR" ||
+      t === "NEED_TEMPLATE"
+    );
   }
 
   async function waitEngineReady(timeoutMs = 5000) {
     if (engineReady) return true;
-    return new Promise(async (resolve) => {
-      const timer = setTimeout(() => {
-        readyWaiter = null;
-        resolve(false);
-      }, timeoutMs);
-      readyWaiter = () => {
-        clearTimeout(timer);
-        readyWaiter = null;
-        resolve(true);
-      };
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
       await sendBg("INJECT_MAIN");
-      postToInject("PING_ENGINE");
-      let n = 0;
-      const iv = setInterval(() => {
-        n++;
-        postToInject("PING_ENGINE");
-        sendBg("INJECT_MAIN");
-        if (n >= 10 || engineReady) clearInterval(iv);
-      }, 200);
-    });
+      const res = await engineCmd("PING");
+      if (res?.ok) {
+        engineReady = true;
+        if (readyWaiter) readyWaiter();
+        return true;
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return engineReady;
   }
 
   function mergeNames(list) {
     const map = new Map();
+    const blocked =
+      /^(tiktok|follow|following|followers|like|reply|share|comment|ikuti|suka|balas|bagikan|komentar)$/i;
     for (const n of list || []) {
       if (typeof n !== "string") continue;
-      let k = n.replace(/\u200b|\u200c|\u200d|\ufeff/g, "").replace(/\s+/g, " ").trim();
+      let k = n
+        .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
+        .replace(/\s+/g, " ")
+        .trim();
       if (k.startsWith("@") && !k.includes(" ")) k = k.slice(1);
-      if (k.length >= 1) map.set(k.toLowerCase(), k);
+      if (k.length < 1 || k.length > 100) continue;
+      if (/^\d+$/.test(k) || /https?:\/\//i.test(k)) continue;
+      if (blocked.test(k)) continue;
+      map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
   }
@@ -78,8 +89,23 @@
     render();
   }
 
+  function extractAwemeFromLocation() {
+    const patterns = [
+      /tiktok\.com\/@[^/]+\/(?:video|photo)\/(\d+)/i,
+      /tiktok\.com\/(?:embed|v)\/(\d+)/i,
+      /\/video\/(\d+)/i,
+      /\/photo\/(\d+)/i,
+    ];
+    for (const re of patterns) {
+      const m = String(location.href).match(re);
+      if (m) return m[1];
+    }
+    return null;
+  }
+
   async function refreshTemplateFlag() {
-    const res = await sendBg("GET_TEMPLATE");
+    const awemeId = extractAwemeFromLocation();
+    const res = await sendBg("GET_TEMPLATE", { awemeId });
     hasTemplate = !!res?.url;
     render();
     return res?.url || null;
@@ -89,14 +115,25 @@
     return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
   }
 
+  /** Bumps on every start/stop so superseded async starts abort cleanly */
+  let startGen = 0;
+
   async function startExtract(opts = {}) {
+    const gen = ++startGen;
     if (stopFinalizeTimer) {
       clearTimeout(stopFinalizeTimer);
       stopFinalizeTimer = null;
     }
+    if (status === "running") {
+      await engineCmd("STOP");
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (gen !== startGen) return;
+
     currentRunId = opts.runId || makeRunId();
     setLocal({ status: "running", names: [], message: "Menyiapkan…" });
-    await sendBg("SET_STATE", {
+    // tabId stamped by background from sender.tab
+    const stRes = await sendBg("SET_STATE", {
       patch: {
         status: "running",
         names: [],
@@ -106,10 +143,35 @@
         runId: currentRunId,
       },
     });
+    if (gen !== startGen) return;
+    if (stRes && stRes.ok === false) {
+      setLocal({
+        status: "error",
+        message:
+          stRes.error === "Run active on another tab"
+            ? "Sudah ada proses di tab lain. Stop dulu di tab itu, lalu coba lagi."
+            : "Gagal memulai. Coba lagi.",
+      });
+      return;
+    }
 
-    await waitEngineReady(5000);
+    const ok = await waitEngineReady(5000);
+    if (gen !== startGen) return;
+    if (!ok) {
+      setLocal({
+        status: "error",
+        message: "Engine belum siap. Refresh video TikTok, lalu coba lagi.",
+      });
+      await sendBg("NAMES_ERROR", {
+        message: "Engine belum siap.",
+        runId: currentRunId,
+      });
+      return;
+    }
+
     const templateUrl =
       opts.templateUrl || (await refreshTemplateFlag()) || null;
+    if (gen !== startGen) return;
 
     if (!templateUrl) {
       setLocal({
@@ -117,26 +179,43 @@
           "Mencoba buka komentar… jika gagal, klik ikon komentar manual dulu.",
       });
     } else {
-      postToInject("SET_TEMPLATE", { templateUrl });
+      await engineCmd("SET_TEMPLATE", { templateUrl });
     }
+    if (gen !== startGen) return;
 
-    postToInject("START", {
-      options: {
-        maxMs: 120_000,
-        includeReplies,
-        awemeId: opts.awemeId || null,
-        templateUrl,
-        runId: currentRunId,
-      },
+    const started = await engineCmd("START", {
+      maxMs: 120_000,
+      includeReplies,
+      awemeId: opts.awemeId || extractAwemeFromLocation(),
+      templateUrl,
+      runId: currentRunId,
     });
+    if (gen !== startGen) return;
+    if (!started?.ok) {
+      setLocal({
+        status: "error",
+        message:
+          started?.error === "Run active on another tab — stop it first"
+            ? "Sudah ada proses di tab lain. Stop dulu, lalu coba lagi."
+            : "Gagal memulai engine. Refresh video lalu coba lagi.",
+      });
+      await sendBg("NAMES_ERROR", {
+        message: started?.error || "START failed",
+        runId: currentRunId,
+      });
+      await engineCmd("STOP");
+    }
   }
 
   function stopExtract() {
-    postToInject("STOP");
+    startGen += 1;
+    engineCmd("STOP");
     setLocal({ status: "running", message: "Menghentikan…" });
     if (stopFinalizeTimer) clearTimeout(stopFinalizeTimer);
+    const stopRunId = currentRunId;
     stopFinalizeTimer = setTimeout(() => {
       if (status !== "running") return;
+      if (currentRunId !== stopRunId) return;
       const list = names.slice();
       setLocal({
         status: list.length ? "stopped" : "error",
@@ -147,7 +226,7 @@
       sendBg("NAMES_DONE", {
         names: list,
         stopReason: "stopped",
-        runId: currentRunId,
+        runId: stopRunId,
         videoHint,
       });
     }, 2800);
@@ -318,38 +397,50 @@
   }
 
   function isCurrentRun(runId) {
-    if (!runId || !currentRunId) return true;
+    if (!currentRunId) return false;
+    if (typeof runId !== "string" || !runId) return false;
     return runId === currentRunId;
   }
 
   window.addEventListener("message", (event) => {
     if (event.source !== window) return;
     const data = event.data;
-    if (!data || data.source !== INJECT_SOURCE) return;
+    if (!acceptFromInject(data)) return;
 
     if (data.type === "READY") {
       engineReady = true;
       if (readyWaiter) readyWaiter();
+      return;
     }
     if (data.type === "NEED_TEMPLATE") {
+      // Only while a run is active
+      if (status !== "running" || !currentRunId) return;
       refreshTemplateFlag().then((url) => {
-        if (url) postToInject("SET_TEMPLATE", { templateUrl: url });
+        if (url) engineCmd("SET_TEMPLATE", { templateUrl: url });
       });
+      return;
     }
     if (data.type === "PROGRESS") {
+      if (status !== "running") return;
       if (!isCurrentRun(data.runId)) return;
+      const list = Array.isArray(data.names) ? data.names : [];
       setLocal({
         status: "running",
-        names: data.names || [],
-        message: data.message || `Mengumpulkan… ${(data.names || []).length}`,
-        videoHint: data.videoHint || videoHint,
+        names: list,
+        message:
+          typeof data.message === "string"
+            ? data.message
+            : `Mengumpulkan… ${list.length}`,
+        videoHint:
+          typeof data.videoHint === "string" ? data.videoHint : videoHint,
       });
       sendBg("NAMES_PROGRESS", {
-        names: data.names || [],
+        names: list,
         message: data.message,
         videoHint: data.videoHint,
         runId: currentRunId,
       });
+      return;
     }
     if (data.type === "DONE") {
       if (!isCurrentRun(data.runId)) return;
@@ -357,13 +448,15 @@
         clearTimeout(stopFinalizeTimer);
         stopFinalizeTimer = null;
       }
-      const list = data.names || [];
-      const stopReason = data.stopReason || "complete";
+      const list = Array.isArray(data.names) ? data.names : [];
+      const stopReason =
+        typeof data.stopReason === "string" ? data.stopReason : "complete";
       setLocal({
         status: mapDone(stopReason, list.length),
         names: list,
         message: localDoneMessage(stopReason, list.length),
-        videoHint: data.videoHint || videoHint,
+        videoHint:
+          typeof data.videoHint === "string" ? data.videoHint : videoHint,
       });
       sendBg("NAMES_DONE", {
         names: list,
@@ -371,6 +464,7 @@
         videoHint: data.videoHint,
         runId: currentRunId,
       });
+      return;
     }
     if (data.type === "ERROR") {
       if (!isCurrentRun(data.runId)) return;
@@ -380,7 +474,8 @@
       }
       setLocal({
         status: "error",
-        message: data.message || "Error",
+        message:
+          typeof data.message === "string" ? data.message : "Error",
       });
       sendBg("NAMES_ERROR", { message: data.message, runId: currentRunId });
     }
@@ -416,9 +511,9 @@
     }
   });
 
-  // Template may arrive while browsing — refresh badge
+  // Template may arrive while browsing — refresh badge (session storage)
   chrome.storage.onChanged.addListener((changes, area) => {
-    if (area === "local" && changes.tnk_comment_url) {
+    if (area === "session" && changes.tnk_comment_url) {
       hasTemplate = !!changes.tnk_comment_url.newValue;
       render();
     }
@@ -428,18 +523,20 @@
     createUi();
     render();
     refreshTemplateFlag();
-    sendBg("INJECT_MAIN").then(() => postToInject("PING_ENGINE"));
+    sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
+      if (r?.ok) engineReady = true;
+    });
 
     let lastHref = location.href;
     setInterval(() => {
       if (location.href !== lastHref) {
         lastHref = location.href;
-        engineReady = false;
         if (stopFinalizeTimer) {
           clearTimeout(stopFinalizeTimer);
           stopFinalizeTimer = null;
         }
-        postToInject("STOP");
+        engineCmd("STOP");
+        engineReady = false;
         currentRunId = null;
         setLocal({
           status: "idle",
@@ -458,7 +555,9 @@
             runId: null,
           },
         });
-        sendBg("INJECT_MAIN");
+        sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
+          if (r?.ok) engineReady = true;
+        });
         refreshTemplateFlag();
       }
       if (!document.getElementById(ROOT_ID)) {
