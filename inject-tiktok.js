@@ -41,10 +41,17 @@
     if (name.startsWith("@") && !name.includes(" ")) name = name.slice(1);
     if (name.length < 1 || name.length > 100) return "";
     if (/^\d+$/.test(name)) return "";
-    if (/https?:\/\//i.test(name)) return "";
-    const blocked =
-      /^(tiktok|follow|following|followers|like|reply|share|comment|ikuti|suka|balas|bagikan|komentar)$/i;
-    if (blocked.test(name)) return "";
+    if (/https?:\/\//i.test(name) || /@\w+\.\w+/.test(name)) return "";
+    if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(name)) return "";
+    if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(name)) return "";
+    if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(name)) return "";
+    const blocked = [
+      /^tiktok$/i, /^follow$/i, /^following$/i, /^followers$/i,
+      /^ikuti$/i, /^like\b/i, /^reply\b/i, /^share\b/i,
+      /^comment\b/i, /^suka$/i, /^balas$/i, /^bagikan$/i,
+      /^komentar$/i, /^send\b/i, /^kirim$/i,
+    ];
+    if (blocked.some((re) => re.test(name))) return "";
     return name;
   }
 
@@ -68,6 +75,7 @@
       /tiktok\.com\/@[^/]+\/(?:video|photo)\/(\d+)/i,
       /tiktok\.com\/(?:embed|v)\/(\d+)/i,
       /[?&]aweme_id=(\d+)/i,
+      /[?&]item_id=(\d+)/i,
       /\/video\/(\d+)/i,
       /\/photo\/(\d+)/i,
     ];

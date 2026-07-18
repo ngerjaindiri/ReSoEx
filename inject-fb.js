@@ -98,8 +98,9 @@
       /^meta$/i, /^suka$/i, /^balas$/i, /^bagikan$/i, /^komentar$/i, /^tulis/i,
       /^lihat/i, /^tampilkan/i, /^semua$/i, /^most relevant$/i, /^all comments$/i,
       /^newest$/i, /^terbaru$/i, /^paling relevan$/i, /^edited$/i, /^sponsor/i,
-      /^follow$/i, /^ikuti$/i, /^send\b/i, /^kirim$/i, /^hide\b/i, /^open\b/i,
-      /^photo$/i, /^video$/i, /^reels?$/i, /^add a comment/i, /^tulis komentar/i,
+      /^follow$/i, /^following$/i, /^followers$/i, /^ikuti$/i, /^send\b/i,
+      /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i,
+      /^reels?$/i, /^add a comment/i, /^tulis komentar/i,
       /^write a comment/i, /^see more$/i, /^lihat selengkapnya$/i,
     ];
     if (blocked.some((re) => re.test(name))) return "";

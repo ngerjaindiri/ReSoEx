@@ -62,8 +62,12 @@
 
   function mergeNames(list) {
     const map = new Map();
-    const blocked =
-      /^(tiktok|follow|following|followers|like|reply|share|comment|ikuti|suka|balas|bagikan|komentar)$/i;
+    const blocked = [
+      /^tiktok$/i, /^follow$/i, /^following$/i, /^followers$/i,
+      /^ikuti$/i, /^like\b/i, /^reply\b/i, /^share\b/i,
+      /^comment\b/i, /^suka$/i, /^balas$/i, /^bagikan$/i,
+      /^komentar$/i, /^send\b/i, /^kirim$/i,
+    ];
     for (const n of list || []) {
       if (typeof n !== "string") continue;
       let k = n
@@ -72,8 +76,12 @@
         .trim();
       if (k.startsWith("@") && !k.includes(" ")) k = k.slice(1);
       if (k.length < 1 || k.length > 100) continue;
-      if (/^\d+$/.test(k) || /https?:\/\//i.test(k)) continue;
-      if (blocked.test(k)) continue;
+      if (/^\d+$/.test(k)) continue;
+      if (/https?:\/\//i.test(k) || /@\w+\.\w+/.test(k)) continue;
+      if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(k)) continue;
+      if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(k)) continue;
+      if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(k)) continue;
+      if (blocked.some((re) => re.test(k))) continue;
       map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
@@ -229,7 +237,7 @@
         runId: stopRunId,
         videoHint,
       });
-    }, 2800);
+    }, 5000);
   }
 
   async function copyNames() {

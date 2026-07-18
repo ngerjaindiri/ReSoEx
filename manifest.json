@@ -1,5 +1,6 @@
 {
   "manifest_version": 3,
+  "minimum_chrome_version": "102",
   "name": "ReSo Ekstention",
   "description": "Ambil nama komentator dari Facebook & TikTok, lalu salin ke Excel. Satu extension untuk semua platform.",
   "version": "1.0.5",

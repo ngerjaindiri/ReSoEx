@@ -62,8 +62,17 @@
 
   function mergeNames(list) {
     const map = new Map();
-    const blocked =
-      /^(view|see|like|likes|reply|share|comment|facebook|meta|suka|balas|bagikan|komentar|lihat|semua|edited|photo|video|reels?)$/i;
+    const blocked = [
+      /^view\b/i, /^see\b/i, /^like\b/i, /^likes$/i, /^reply\b/i, /^share\b/i,
+      /^comment\b/i, /^write\b/i, /^log\s*in/i, /^sign\s*up/i, /^facebook$/i,
+      /^meta$/i, /^suka$/i, /^balas$/i, /^bagikan$/i, /^komentar$/i, /^tulis/i,
+      /^lihat/i, /^tampilkan/i, /^semua$/i, /^most relevant$/i, /^all comments$/i,
+      /^newest$/i, /^terbaru$/i, /^paling relevan$/i, /^edited$/i, /^sponsor/i,
+      /^follow$/i, /^following$/i, /^followers$/i, /^ikuti$/i, /^send\b/i,
+      /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i, /^reels?$/i,
+      /^add a comment/i, /^tulis komentar/i, /^write a comment/i,
+      /^see more$/i, /^lihat selengkapnya$/i,
+    ];
     for (const n of list || []) {
       if (typeof n !== "string") continue;
       let k = n
@@ -72,11 +81,34 @@
         .trim();
       k = k
         .replace(/\s+[·•|].*$/, "")
-        .replace(/\s+\d+\s*(d|h|m|w|jam|menit|hari)\b.*$/i, "")
+        .replace(
+          /\s+(sekitar\s+)?(satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa)\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
+          ""
+        )
+        .replace(
+          /\s+(sehari|semenit|sejam|setahun|seminggu|sebulan)\s+(yang\s+lalu|lalu).*$/i,
+          ""
+        )
+        .replace(
+          /\s+\d+\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
+          ""
+        )
+        .replace(
+          /\s+(about\s+)?(a|an|\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago.*$/i,
+          ""
+        )
+        .replace(/\s+just\s+now.*$/i, "")
+        .replace(/\s+\d+\s*(d|h|m|w|y|jam|menit|hari|minggu|tahun|bulan|hr|min|detik|sec|second|minute|hour|day|week|month|year)s?\b.*$/i, "")
+        .replace(/\s+Edited$/i, "")
         .trim();
+      if (/\bis with\b/i.test(k)) k = k.split(/\bis with\b/i)[0].trim();
       if (k.length < 2 || k.length > 100) continue;
-      if (/^\d+$/.test(k) || /^@/.test(k) || /https?:\/\//i.test(k)) continue;
-      if (blocked.test(k)) continue;
+      if (/^\d+$/.test(k) || /^@/.test(k)) continue;
+      if (/https?:\/\//i.test(k) || /@\w+\.\w+/.test(k)) continue;
+      if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(k)) continue;
+      if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(k)) continue;
+      if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(k)) continue;
+      if (blocked.some((re) => re.test(k))) continue;
       map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
@@ -205,7 +237,7 @@
         runId: stopRunId,
         postHint,
       });
-    }, 2800);
+    }, 5000);
   }
 
   function markBestPostRoot() {

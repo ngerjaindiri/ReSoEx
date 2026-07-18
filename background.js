@@ -61,8 +61,8 @@ async function getTemplate(requiredAwemeId = null) {
   if (url && !isTikTokTemplateValid(url, meta, null)) {
     try {
       await chrome.storage.session.remove([URL_TEMPLATE_KEY, URL_META_KEY]);
-    } catch {
-      /* ignore */
+    } catch (e) {
+      console.debug("[ReSo] remove expired template:", e?.message);
     }
     return { url: null, meta: null };
   }
@@ -89,8 +89,8 @@ async function getReplayTemplate(awemeId = null) {
     if (url) {
       try {
         await chrome.storage.session.remove([URL_TEMPLATE_KEY, URL_META_KEY]);
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.debug("[ReSo] remove invalid template:", e?.message);
       }
     }
     return { url: null, meta: null };
@@ -337,8 +337,8 @@ chrome.webRequest.onBeforeRequest.addListener(
               "Template API komentar siap. Klik Proses untuk ambil nama.",
           });
         }
-      } catch {
-        /* ignore */
+      } catch (e) {
+        console.warn("[ReSo] webRequest template capture failed:", e?.message);
       }
     })();
   },
@@ -355,8 +355,8 @@ chrome.runtime.onInstalled.addListener(async () => {
   // Drop legacy local template keys from pre-Sprint-A builds
   try {
     await chrome.storage.local.remove([URL_TEMPLATE_KEY, URL_META_KEY]);
-  } catch {
-    /* ignore */
+  } catch (e) {
+    console.debug("[ReSo] onInstalled cleanup:", e?.message);
   }
 });
 
@@ -365,8 +365,8 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   if (!url) return;
 
   if (isFacebookUrl(url)) {
-    // Inject early so GraphQL buffer captures comments
-    if (changeInfo.status === "loading" || changeInfo.status === "complete") {
+    // Inject early on loading so GraphQL buffer captures comments from the start
+    if (changeInfo.status === "loading") {
       await injectMain(tabId, "facebook");
     }
   } else if (isTikTokUrl(url)) {
@@ -548,13 +548,13 @@ async function handleMessage(msg, sender) {
             type: "STOP_EXTRACT",
             runId: prev.runId,
           });
-        } catch {
-          /* ignore */
+        } catch (e) {
+          console.debug("[ReSo] RESET stop content:", e?.message);
         }
         try {
           await engineCmd(prev.tabId, p, "STOP", {});
-        } catch {
-          /* ignore */
+        } catch (e) {
+          console.debug("[ReSo] RESET stop engine:", e?.message);
         }
       }
       const resetPatch =
@@ -805,14 +805,14 @@ async function stopActiveRun(platform) {
         type: "STOP_EXTRACT",
         runId: state.runId,
       });
-    } catch {
-      /* content may be gone */
+    } catch (e) {
+      console.debug("[ReSo] stopActiveRun content:", e?.message);
     }
     // Force MAIN-world stop even if content script is unresponsive
     try {
       await engineCmd(tabId, platform, "STOP", {});
-    } catch {
-      /* tab closed / no host access */
+    } catch (e) {
+      console.debug("[ReSo] stopActiveRun engine:", e?.message);
     }
   }
   await setState(platform, {
