@@ -58,37 +58,81 @@ export function detectPlatform(url) {
 
 // ===================== Facebook Helpers =====================
 
+// BEGIN-RESO-FBURLS
 /**
- * Apakah URL adalah halaman post permalink Facebook — di halaman ini engine FB
- * dapat membangun synthetic GraphQL template dari feedback id di URL (cermin
- * dari `feedbackIdFromUrl` engine inject-fb.js), sehingga pagination otomatis
- * selalu bisa dijalankan tanpa perlu capture template dulu.
- * @param {string|null|undefined} url
- * @returns {boolean}
- */
-export function isFacebookPostPage(url) {
-  if (!url || typeof url !== "string") return false;
+ * SINGLE SOURCE OF TRUTH untuk deteksi permalink Facebook — dipakai badge
+ * panel (isFacebookPostPage), synthetic template engine (extractFbFeedbackIds),
+ * dan pre-check. Disalin byte-identik ke inject-fb.js & content-fb.js; dijamin   * fixture test FBURLS. Mengembalikan kandidat story/feedback id dari URL;
+   * engine mem-probe tiap kandidat (urutan = prioritas) dan memakai yang benar
+   * menghasilkan page_info — robust terhadap bentuk URL yang id-nya ambigu
+   * (mis. album `set=a.X.Y.Z`, postingan multi-foto `set=pcb.<story>`,
+   * dan `photos/a.<uid>.<fbid>`).
+   */
+function extractFbFeedbackIds(url) {
+  const out = [];
+  const add = (id) => {
+    if (typeof id !== "string" || !/^[A-Za-z0-9]{8,}$/.test(id)) return;
+    if (!out.includes(id)) out.push(id);
+  };
+  if (!url || typeof url !== "string") return out;
   const href = url;
-  if (
-    /\/posts\/\d+/.test(href) ||
-    /\/permalink\.php\?story_fbid=\d+/.test(href) ||
-    /\/story\.php\?story_fbid=\d+/.test(href) ||
-    /\/photos\/\d+/.test(href) ||
-    /\/videos\/\d+/.test(href) ||
-    /\/reel\/\d+/.test(href) ||
-    /\/watch\/\d+/.test(href) ||
-    /[?&](?:story_fbid|fbid)=\d+/.test(href)
-  ) {
-    return true;
+
+  // 1) Bentuk path yang membawa story/feedback id
+  const direct = [
+    /\/posts\/[^/?#]+\/([^/?#]+)/, // posts/<slug>/<id> (gaya baru)
+    /\/posts\/([^/?#]+)/, // posts/<id> (klasik & grup)
+    /\/permalink\.php\?story_fbid=([^&#]+)/,
+    /\/story\.php\?story_fbid=([^&#]+)/,
+    /\/photos\/a\.\d+\.(\d+)/, // photos/a.<uid>.<fbid> (album foto)
+    /\/photos\/(\d+)/, // foto tunggal (id foto — probe memvalidasi)
+    /\/videos\/(\d+)/,
+    /\/reel\/(\d+)/,
+    /\/video\.php\?v=(\d+)/,
+  ];
+  for (const re of direct) {
+    const m = href.match(re);
+    if (m) add(m[1]);
   }
-  try {
-    const u = new URL(href);
-    if (/^\d{8,}$/.test(u.pathname.replace(/^\/+|\/+$/g, ""))) return true;
-  } catch {
-    /* ignore */
-  }
-  return false;
+
+  // 2) Watch (query v=) — bentuk paling umum untuk permalink video
+  const watch = href.match(/\/watch(?:[^?#]*\?|\?)[^#]*\bv=(\d+)/i);
+  if (watch) add(watch[1]);    // 3) Param umum (story_fbid/fbid/v, termasuk nilai pfbid alfanumerik)
+    //    + set: pcb.<story> = postingan multi-foto (id-nya feedback/story id,
+    //      prioritas tinggi karena `fbid` di URL tersebut id foto, bukan story)
+    //      dan a.<album>.<user>.<story> (komponen terakhir = story id)
+    try {
+      const u = new URL(href);
+      for (const key of ["story_fbid"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      const set = u.searchParams.get("set") || "";
+      const parts = String(set).split(".");
+      if (parts[0] === "pcb" && parts.length >= 2) add(parts[parts.length - 1]);
+      for (const key of ["fbid", "v"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      if (parts[0] === "a" && parts.length >= 4) add(parts[3]);
+    } catch {
+      /* ignore */
+    }
+  return out;
 }
+
+/** Kandidat pertama (prioritas tertinggi). */
+function extractFbFeedbackId(url) {
+  const ids = extractFbFeedbackIds(url);
+  return ids.length ? ids[0] : null;
+}
+
+/** Apakah URL adalah halaman post permalink FB yang didukung engine? */
+function isFacebookPostPage(url) {
+  return extractFbFeedbackIds(url).length > 0;
+}
+// END-RESO-FBURLS
+
+export { extractFbFeedbackIds, extractFbFeedbackId, isFacebookPostPage };
 
 // ===================== Instagram Helpers =====================
 

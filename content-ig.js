@@ -11,7 +11,7 @@
   let ui = null;
   let status = "idle";
   let names = [];
-  let message = "Buka post/reel Instagram, pastikan login, lalu Proses.";
+  let message = "Buka post/reel Instagram, pastikan sudah login, lalu klik Proses.";
   let postHint = "";
   let includeReplies = false;
   let hasTemplate = false;
@@ -538,7 +538,7 @@
     setLocal({
       status: "idle",
       names: [],
-      message: "Buka post/reel Instagram, pastikan login, lalu klik Proses.",
+      message: "Buka post/reel Instagram, pastikan sudah login, lalu klik Proses.",
       postHint: "",
     });
     await sendBg("RESET");
@@ -583,12 +583,17 @@
     }
     const root = document.createElement("div");
     root.id = ROOT_ID;
+    // Default visibility: TERTUTUP selalu (flat minimal) — panel tidak
+    // mengambang menutupi halaman saat scrolling. Buka lewat FAB; hasil
+    // tetap terlihat di badge FAB.
+    root.classList.add("ing-collapsed");
+    ensureIconFont();
     root.innerHTML = `
       <div class="ing-panel" role="region" aria-label="Instagram Username Komentar">
         <div class="ing-header">
-          <span class="ing-logo" aria-hidden="true">I</span>
+          <span class="rs-ic ing-logo-ic" aria-hidden="true">instagram</span>
           <span class="ing-title">Username Komentar</span>
-          <button type="button" class="ing-min" data-ing="min" title="Tutup" aria-label="Tutup panel">–</button>
+          <button type="button" class="ing-min" data-ing="min" title="Tutup" aria-label="Tutup panel"><span class="rs-ic" aria-hidden="true">close</span></button>
         </div>
         <div class="ing-body">
           <div class="ing-status" data-ing="status" aria-live="polite"></div>
@@ -597,24 +602,26 @@
           <div class="ing-badge" data-ing="badge"></div>
           <label class="ing-check">
             <input type="checkbox" data-ing="replies" />
-            Sertakan balasan (reply)
+            <span class="rs-ic" aria-hidden="true">forum</span>
+            <span>Balasan</span>
           </label>
           <div class="ing-tools">
-            <input class="ing-search" type="search" data-ing="search" placeholder="Cari username…" aria-label="Cari username" />
-            <button type="button" class="ing-btn ing-sort" data-ing="sort" title="Urutkan username A–Z / urutan asli">Urutkan A-Z</button>
+            <span class="rs-ic ing-search-ic" aria-hidden="true">search</span>
+            <input class="ing-search" type="search" data-ing="search" placeholder="Cari…" aria-label="Cari username" />
+            <button type="button" class="ing-btn ing-sort" data-ing="sort" title="Urutkan A–Z" aria-label="Urutkan A–Z" aria-pressed="false"><span class="rs-ic" aria-hidden="true">sort</span></button>
           </div>
           <div class="ing-list" data-ing="list" hidden></div>
           <div class="ing-actions">
-            <button type="button" class="ing-btn ing-primary" data-ing="process" title="Mulai ambil username">Proses</button>
-            <button type="button" class="ing-btn" data-ing="stop" hidden title="Hentikan">Stop</button>
-            <button type="button" class="ing-btn ing-success" data-ing="copy" disabled title="Salin ke clipboard">Copy username</button>
-            <button type="button" class="ing-btn ing-ghost" data-ing="reset" title="Bersihkan hasil & reset">Reset</button>
-            <button type="button" class="ing-btn" data-ing="csv" disabled title="Simpan ke file CSV (siap Excel)">CSV</button>
-            <button type="button" class="ing-btn ing-ghost" data-ing="merge" title="Gabungkan nama unik FB + TikTok + IG lalu salin">Gabung</button>
+            <button type="button" class="ing-btn ing-primary" data-ing="process" title="Mulai ambil username" aria-label="Mulai ambil username"><span class="rs-ic" aria-hidden="true">play_arrow</span></button>
+            <button type="button" class="ing-btn" data-ing="stop" hidden title="Hentikan" aria-label="Hentikan"><span class="rs-ic" aria-hidden="true">stop</span></button>
+            <button type="button" class="ing-btn ing-success" data-ing="copy" disabled title="Salin ke clipboard" aria-label="Salin username"><span class="rs-ic" aria-hidden="true">content_copy</span></button>
+            <button type="button" class="ing-btn" data-ing="csv" disabled title="Simpan ke CSV (Excel)" aria-label="Simpan CSV"><span class="rs-ic" aria-hidden="true">download</span></button>
+            <button type="button" class="ing-btn ing-ghost" data-ing="reset" title="Bersihkan hasil" aria-label="Bersihkan hasil"><span class="rs-ic" aria-hidden="true">restart_alt</span></button>
+            <button type="button" class="ing-btn ing-ghost" data-ing="merge" title="Gabung FB + TikTok + IG lalu salin" aria-label="Gabung semua platform"><span class="rs-ic" aria-hidden="true">merge_type</span></button>
           </div>
         </div>
       </div>
-      <button type="button" class="ing-fab" data-ing="fab" data-count="" title="Username Komentar" aria-label="Buka panel Username Komentar">I</button>
+      <button type="button" class="ing-fab" data-ing="fab" data-count="" title="Username Komentar" aria-label="Buka panel Username Komentar"><span class="rs-ic" aria-hidden="true">forum</span></button>
     `;
     (document.body || document.documentElement).appendChild(root);
     ui = root;
@@ -636,6 +643,8 @@
     root.addEventListener("change", (e) => {
       if (e.target?.getAttribute?.("data-ing") === "replies") {
         includeReplies = !!e.target.checked;
+        // Persist pref seketika (parity popup) — bukan hanya saat run dimulai.
+        sendBg("SET_STATE", { patch: { includeReplies } });
       }
     });
     root.addEventListener("input", (e) => {
@@ -653,6 +662,17 @@
     });
     applySettings();
     return root;
+  }
+
+  /** Load Material Symbols (Google) sekali — dipakai semua ikon panel/FAB. */
+  function ensureIconFont() {
+    if (document.getElementById("rs-ms-font")) return;
+    const link = document.createElement("link");
+    link.id = "rs-ms-font";
+    link.rel = "stylesheet";
+    link.href =
+      "https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block";
+    (document.head || document.documentElement).appendChild(link);
   }
 
   /**
@@ -726,9 +746,9 @@
           : "0 username";
     }
     if (badgeEl) {
-      badgeEl.textContent = hasTemplate
-        ? "API komentar: siap"
-        : "API komentar: belum — buka komentar & pastikan login";
+      badgeEl.innerHTML = hasTemplate
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       badgeEl.classList.toggle("ing-ok", hasTemplate);
       badgeEl.classList.toggle("ing-warn", !hasTemplate);
     }
@@ -737,17 +757,32 @@
     const running = status === "running";
     if (processBtn) {
       processBtn.disabled = running;
-      processBtn.textContent = running ? "Memproses…" : "Proses";
+      const processIc = processBtn.querySelector(".rs-ic");
+      if (processIc) {
+        processIc.textContent = running ? "progress_activity" : "play_arrow";
+      }
+      processBtn.setAttribute(
+        "aria-label",
+        running ? "Memproses…" : "Mulai ambil username"
+      );
     }
     if (stopBtn) stopBtn.hidden = !running;
     if (copyBtn) {
       copyBtn.disabled = vis.length === 0;
-      copyBtn.textContent = vis.length
-        ? `Copy username (${vis.length})`
-        : "Copy username";
+      copyBtn.setAttribute(
+        "aria-label",
+        vis.length ? `Salin username (${vis.length})` : "Salin username"
+      );
     }
     if (csvBtn) csvBtn.disabled = vis.length === 0;
     if (mergeBtn) mergeBtn.disabled = false;
+    const sortBtn = ui.querySelector('[data-ing="sort"]');
+    if (sortBtn) {
+      sortBtn.setAttribute("aria-pressed", String(sortAz));
+      sortBtn.classList.toggle("ing-active", sortAz);
+      sortBtn.title = sortAz ? "Urutkan asli" : "Urutkan A–Z";
+      sortBtn.setAttribute("aria-label", sortAz ? "Urutkan asli" : "Urutkan A–Z");
+    }
 
     // Preview daftar — hormati filter & urutan (parity dengan popup).
     const listEl = ui.querySelector('[data-ing="list"]');
@@ -934,8 +969,8 @@
   function boot() {
     createUi();
     render();
-    // Default visibility: expanded saat ada hasil tersimpan (sama dengan
-    // Facebook) — pulihkan hasil lintas reload.
+    // Default visibility: TETAP TERTUTUP (flat minimal) — hasil tersimpan
+    // dipulihkan ke state panel + badge FAB; panel tidak auto-buka.
     sendBg("GET_STATE").then((res) => {
       if (!res?.ok || !res?.state) return;
       const st = res.state;

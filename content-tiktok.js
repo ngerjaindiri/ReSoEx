@@ -22,6 +22,13 @@
   let currentRunId = null;
   let stopFinalizeTimer = null;
 
+  // Cooldown antar-run — jeda minimum setelah run apa pun, lebih lama lagi
+  // setelah rate limit (pola IG, konsisten lintas platform).
+  const COOLDOWN_MS = 15_000;
+  const COOLDOWN_RATE_LIMIT_MS = 60_000;
+  let lastRunEndAt = 0;
+  let lastRateLimitAt = 0;
+
   function sendBg(type, payload = {}) {
     try {
       return chrome.runtime.sendMessage({ type, ...payload }).catch(() => null);
@@ -363,6 +370,29 @@
     }
     if (gen !== startGen) return;
 
+    // Cooldown antar-run (pola IG — konsisten lintas platform): jeda minimum
+    // setelah run apa pun, lebih lama lagi setelah rate limit.
+    const nowC = Date.now();
+    const sinceEnd = lastRunEndAt ? nowC - lastRunEndAt : Infinity;
+    const sinceRl = lastRateLimitAt ? nowC - lastRateLimitAt : Infinity;
+    const coolMs =
+      sinceRl < COOLDOWN_RATE_LIMIT_MS
+        ? COOLDOWN_RATE_LIMIT_MS - sinceRl
+        : Math.max(0, COOLDOWN_MS - sinceEnd);
+    if (coolMs > 0) {
+      const waitSec = Math.ceil(coolMs / 1000);
+      setLocal({
+        status: "idle",
+        message: `Tunggu ${waitSec} dtk sebelum Proses lagi (cooldown anti rate-limit).`,
+      });
+      setTimeout(() => {
+        if (status !== "running") {
+          setLocal({ message: "Cooldown selesai — klik Proses untuk mulai." });
+        }
+      }, coolMs);
+      return;
+    }
+
     // Pre-check login (pola IG): replay API komentar butuh sesi TikTok.
     // Gagal cepat dengan pesan jelas alih-alih run yang sia-sia saat logout.
     const login = await sendBg("CHECK_TT_LOGIN");
@@ -472,11 +502,10 @@
       if (status !== "running") return;
       if (currentRunId !== stopRunId) return;
       const list = names.slice();
+      lastRunEndAt = Date.now();
       setLocal({
         status: list.length ? "stopped" : "error",
-        message: list.length
-          ? doneMessage("stopped", list.length, "tiktok")
-          : doneMessage("stopped", 0, "tiktok"),
+        message: doneMessage("stopped", list.length, "tiktok"),
       });
       sendBg("NAMES_DONE", {
         names: list,
@@ -543,12 +572,17 @@
     }
     const root = document.createElement("div");
     root.id = ROOT_ID;
+    // Default visibility: TERTUTUP selalu (flat minimal) — panel tidak
+    // mengambang menutupi halaman saat scrolling. Buka lewat FAB; hasil
+    // tetap terlihat di badge FAB.
+    root.classList.add("tnk-collapsed");
+    ensureIconFont();
     root.innerHTML = `
       <div class="tnk-panel" role="region" aria-label="TikTok Nama Komentar">
         <div class="tnk-header">
-          <span class="tnk-logo" aria-hidden="true">T</span>
+          <span class="rs-ic tnk-logo-ic" aria-hidden="true">music_note</span>
           <span class="tnk-title">Nama Komentar</span>
-          <button type="button" class="tnk-min" data-tnk="min" title="Tutup" aria-label="Tutup panel">–</button>
+          <button type="button" class="tnk-min" data-tnk="min" title="Tutup" aria-label="Tutup panel"><span class="rs-ic" aria-hidden="true">close</span></button>
         </div>
         <div class="tnk-body">
           <div class="tnk-status" data-tnk="status" aria-live="polite"></div>
@@ -557,24 +591,26 @@
           <div class="tnk-badge" data-tnk="badge"></div>
           <label class="tnk-check">
             <input type="checkbox" data-tnk="replies" />
-            Sertakan balasan (reply)
+            <span class="rs-ic" aria-hidden="true">forum</span>
+            <span>Balasan</span>
           </label>
           <div class="tnk-tools">
-            <input class="tnk-search" type="search" data-tnk="search" placeholder="Cari nama…" aria-label="Cari nama" />
-            <button type="button" class="tnk-btn tnk-sort" data-tnk="sort" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+            <span class="rs-ic tnk-search-ic" aria-hidden="true">search</span>
+            <input class="tnk-search" type="search" data-tnk="search" placeholder="Cari…" aria-label="Cari nama" />
+            <button type="button" class="tnk-btn tnk-sort" data-tnk="sort" title="Urutkan A–Z" aria-label="Urutkan A–Z" aria-pressed="false"><span class="rs-ic" aria-hidden="true">sort</span></button>
           </div>
           <div class="tnk-list" data-tnk="list" hidden></div>
           <div class="tnk-actions">
-            <button type="button" class="tnk-btn tnk-primary" data-tnk="process" title="Mulai ambil nama">Proses</button>
-            <button type="button" class="tnk-btn" data-tnk="stop" hidden title="Hentikan">Stop</button>
-            <button type="button" class="tnk-btn tnk-success" data-tnk="copy" disabled title="Salin ke clipboard">Copy nama</button>
-            <button type="button" class="tnk-btn tnk-ghost" data-tnk="reset" title="Bersihkan hasil & reset">Reset</button>
-            <button type="button" class="tnk-btn" data-tnk="csv" disabled title="Simpan ke file CSV (siap Excel)">CSV</button>
-            <button type="button" class="tnk-btn tnk-ghost" data-tnk="merge" title="Gabungkan nama unik FB + TikTok + IG lalu salin">Gabung</button>
+            <button type="button" class="tnk-btn tnk-primary" data-tnk="process" title="Mulai ambil nama" aria-label="Mulai ambil nama"><span class="rs-ic" aria-hidden="true">play_arrow</span></button>
+            <button type="button" class="tnk-btn" data-tnk="stop" hidden title="Hentikan" aria-label="Hentikan"><span class="rs-ic" aria-hidden="true">stop</span></button>
+            <button type="button" class="tnk-btn tnk-success" data-tnk="copy" disabled title="Salin ke clipboard" aria-label="Salin nama"><span class="rs-ic" aria-hidden="true">content_copy</span></button>
+            <button type="button" class="tnk-btn" data-tnk="csv" disabled title="Simpan ke CSV (Excel)" aria-label="Simpan CSV"><span class="rs-ic" aria-hidden="true">download</span></button>
+            <button type="button" class="tnk-btn tnk-ghost" data-tnk="reset" title="Bersihkan hasil" aria-label="Bersihkan hasil"><span class="rs-ic" aria-hidden="true">restart_alt</span></button>
+            <button type="button" class="tnk-btn tnk-ghost" data-tnk="merge" title="Gabung FB + TikTok + IG lalu salin" aria-label="Gabung semua platform"><span class="rs-ic" aria-hidden="true">merge_type</span></button>
           </div>
         </div>
       </div>
-      <button type="button" class="tnk-fab" data-tnk="fab" data-count="" title="Nama Komentar" aria-label="Buka panel Nama Komentar">T</button>
+      <button type="button" class="tnk-fab" data-tnk="fab" data-count="" title="Nama Komentar" aria-label="Buka panel Nama Komentar"><span class="rs-ic" aria-hidden="true">forum</span></button>
     `;
     (document.body || document.documentElement).appendChild(root);
     ui = root;
@@ -596,6 +632,8 @@
     root.addEventListener("change", (e) => {
       if (e.target?.getAttribute?.("data-tnk") === "replies") {
         includeReplies = !!e.target.checked;
+        // Persist pref seketika (parity popup) — bukan hanya saat run dimulai.
+        sendBg("SET_STATE", { patch: { includeReplies } });
       }
     });
     root.addEventListener("input", (e) => {
@@ -613,6 +651,17 @@
     });
     applySettings();
     return root;
+  }
+
+  /** Load Material Symbols (Google) sekali — dipakai semua ikon panel/FAB. */
+  function ensureIconFont() {
+    if (document.getElementById("rs-ms-font")) return;
+    const link = document.createElement("link");
+    link.id = "rs-ms-font";
+    link.rel = "stylesheet";
+    link.href =
+      "https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block";
+    (document.head || document.documentElement).appendChild(link);
   }
 
   /**
@@ -669,7 +718,7 @@
       hintEl.textContent = terminal
         ? ""
         : videoHint
-          ? `Video: ${videoHint}`
+          ? `Target: ${videoHint}`
           : "Buka URL /@user/video/...";
     }
     // Count — saat filter aktif tampilkan "X dari N" agar jelas kenapa
@@ -683,9 +732,9 @@
           : "0 nama";
     }
     if (badgeEl) {
-      badgeEl.textContent = hasTemplate
-        ? "API komentar: siap"
-        : "API komentar: belum — buka panel komentar";
+      badgeEl.innerHTML = hasTemplate
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       badgeEl.classList.toggle("tnk-ok", hasTemplate);
       badgeEl.classList.toggle("tnk-warn", !hasTemplate);
     }
@@ -694,17 +743,32 @@
     const running = status === "running";
     if (processBtn) {
       processBtn.disabled = running;
-      processBtn.textContent = running ? "Memproses…" : "Proses";
+      const processIc = processBtn.querySelector(".rs-ic");
+      if (processIc) {
+        processIc.textContent = running ? "progress_activity" : "play_arrow";
+      }
+      processBtn.setAttribute(
+        "aria-label",
+        running ? "Memproses…" : "Mulai ambil nama"
+      );
     }
     if (stopBtn) stopBtn.hidden = !running;
     if (copyBtn) {
       copyBtn.disabled = vis.length === 0;
-      copyBtn.textContent = vis.length
-        ? `Copy nama (${vis.length})`
-        : "Copy nama";
+      copyBtn.setAttribute(
+        "aria-label",
+        vis.length ? `Salin nama (${vis.length})` : "Salin nama"
+      );
     }
     if (csvBtn) csvBtn.disabled = vis.length === 0;
     if (mergeBtn) mergeBtn.disabled = false;
+    const sortBtn = ui.querySelector('[data-tnk="sort"]');
+    if (sortBtn) {
+      sortBtn.setAttribute("aria-pressed", String(sortAz));
+      sortBtn.classList.toggle("tnk-active", sortAz);
+      sortBtn.title = sortAz ? "Urutkan asli" : "Urutkan A–Z";
+      sortBtn.setAttribute("aria-label", sortAz ? "Urutkan asli" : "Urutkan A–Z");
+    }
 
     // Preview daftar — hormati filter & urutan (parity dengan popup).
     const listEl = ui.querySelector('[data-tnk="list"]');
@@ -809,6 +873,10 @@
       const list = Array.isArray(data.names) ? data.names : [];
       const stopReason =
         typeof data.stopReason === "string" ? data.stopReason : "complete";
+      lastRunEndAt = Date.now();
+      if (stopReason === "rate_limit" || /rate\s*limit|429/i.test(data.videoHint || "")) {
+        lastRateLimitAt = Date.now();
+      }
       setLocal({
         status: mapDone(stopReason, list.length),
         names: list,
@@ -883,8 +951,8 @@
   function boot() {
     createUi();
     render();
-    // Default visibility: expanded saat ada hasil tersimpan (sama dengan
-    // Facebook) — pulihkan hasil lintas reload.
+    // Default visibility: TETAP TERTUTUP (flat minimal) — hasil tersimpan
+    // dipulihkan ke state panel + badge FAB; panel tidak auto-buka.
     sendBg("GET_STATE").then((res) => {
       if (!res?.ok || !res?.state) return;
       const st = res.state;

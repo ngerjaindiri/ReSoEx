@@ -61,6 +61,7 @@ const sharedNorm = extractBlocks("NORMALIZE", read("shared.js")); // [FB, TT, IG
 const sharedDone = extractBlocks("DONEMSG", read("shared.js")); // [DONE]
 const sharedParsers = extractBlocks("PARSERS", read("shared.js")); // [1 block: TT+IG+FB]
 const sharedTools = extractBlocks("PANELTOOLS", read("shared.js")); // [1]
+const sharedUrls = extractBlocks("FBURLS", read("shared.js")); // [1 block: deteksi permalink FB]
 const members = {
   "inject-fb.js": extractBlocks("NORMALIZE", read("inject-fb.js")),
   "content-fb.js": extractBlocks("NORMALIZE", read("content-fb.js")),
@@ -84,6 +85,10 @@ const membersTools = {
   "content-tiktok.js": extractBlocks("PANELTOOLS", read("content-tiktok.js")),
   "content-ig.js": extractBlocks("PANELTOOLS", read("content-ig.js")),
 };
+const membersUrls = {
+  "inject-fb.js": extractBlocks("FBURLS", read("inject-fb.js")),
+  "content-fb.js": extractBlocks("FBURLS", read("content-fb.js")),
+};
 
 const FILES_FB = ["inject-fb.js", "content-fb.js"];
 const FILES_TT = ["inject-tiktok.js", "content-tiktok.js"];
@@ -91,12 +96,14 @@ const FILES_IG = ["inject-ig.js", "content-ig.js"];
 const FILES_DONE = ["content-fb.js", "content-tiktok.js", "content-ig.js"];
 const FILES_PARSERS = ["inject-fb.js", "inject-tiktok.js", "inject-ig.js"];
 const FILES_TOOLS = ["content-fb.js", "content-tiktok.js", "content-ig.js"];
+const FILES_URLS = ["inject-fb.js", "content-fb.js"];
 
-test("block layout: shared 3 norm + 1 done + 3 parsers + 1 tools; members carry copies", () => {
+test("block layout: shared 3 norm + 1 done + 3 parsers + 1 tools + 1 fburls; members carry copies", () => {
   assert.equal(sharedNorm.length, 3, "shared normalize blocks");
   assert.equal(sharedDone.length, 1, "shared doneMessage block");
   assert.equal(sharedParsers.length, 1, "shared parsers block");
   assert.equal(sharedTools.length, 1, "shared panelTools block");
+  assert.equal(sharedUrls.length, 1, "shared fburls block");
   for (const f of Object.keys(members)) {
     assert.equal(members[f].length, 1, `${f} must carry one normalize block`);
   }
@@ -109,13 +116,17 @@ test("block layout: shared 3 norm + 1 done + 3 parsers + 1 tools; members carry 
   for (const f of Object.keys(membersTools)) {
     assert.equal(membersTools[f].length, 1, `${f} must carry one panelTools block`);
   }
+  for (const f of Object.keys(membersUrls)) {
+    assert.equal(membersUrls[f].length, 1, `${f} must carry one fburls block`);
+  }
 });
 
-test("SOURCE PARITY: 6 normalize + 4 done + 9 parser + 4 panelTools copies byte-identical", () => {
+test("SOURCE PARITY: 6 normalize + 4 done + 9 parser + 4 panelTools + 3 fburls copies byte-identical", () => {
   const ref = [minify(sharedNorm[0]), minify(sharedNorm[1]), minify(sharedNorm[2])];
   const doneRef = minify(sharedDone[0]);
   const parserRef = minify(sharedParsers[0]); // one block: TT+IG+FB
   const toolsRef = minify(sharedTools[0]);
+  const urlsRef = minify(sharedUrls[0]);
   for (const f of FILES_FB) {
     assert.equal(minify(members[f][0]), ref[0], `${f} FB normalize drifted`);
   }
@@ -144,6 +155,13 @@ test("SOURCE PARITY: 6 normalize + 4 done + 9 parser + 4 panelTools copies byte-
       minify(membersTools[f][0]),
       toolsRef,
       `${f} panelTools drifted`
+    );
+  }
+  for (const f of FILES_URLS) {
+    assert.equal(
+      minify(membersUrls[f][0]),
+      urlsRef,
+      `${f} fburls drifted`
     );
   }
 });
@@ -420,6 +438,60 @@ test("BEHAVIOR: extractGraphqlNames — pola JSON teks GraphQL FB", () => {
     '{"__typename":"Comment","author":{"__typename":"User","name":"Ida"}}' +
     '{"__typename":"Comment","author":{"__typename":"User","name":"Joko"}}';
   assert.deepEqual(PARSE_FB(two), ["Ida", "Joko"]);
+});
+
+// ---- FBURLS behavior fixtures (deteksi permalink per bentuk URL) ----
+
+// FBURLS block = 3 hoisted function declarations; compile whole block.
+const URLS_FNS = new Function(
+  sharedUrls[0] +
+    "\nreturn { extractFbFeedbackIds, extractFbFeedbackId, isFacebookPostPage };"
+)();
+
+const FB_URL_CASES = [
+  // [url, expected ids, isPostPage]
+  ["https://www.facebook.com/posts/10153322400567519", ["10153322400567519"], true],
+  ["https://www.facebook.com/LaraFabianTheNetherlands/posts/2-photos-source-gala-france1/960401149426609/", ["960401149426609"], true],
+  ["https://www.facebook.com/permalink.php?story_fbid=10153322400567519&id=14038332518", ["10153322400567519"], true],
+  ["https://www.facebook.com/permalink.php?story_fbid=pfbid024uFTLCkH5XDVJBrbeuCmZJixzf2qJM8kKr&id=123", ["pfbid024uFTLCkH5XDVJBrbeuCmZJixzf2qJM8kKr"], true],
+  ["https://www.facebook.com/story.php?story_fbid=10153322400567519", ["10153322400567519"], true],
+  ["https://www.facebook.com/photo.php?fbid=123456789012345&set=a.757108353089224.1812885352.1020472719478&type=3", ["123456789012345", "1020472719478"], true],
+  // Terverifikasi lapangan (2026-08-11): klik gambar 1 di postingan multi-foto
+  // → /photo?fbid=<id foto>&set=pcb.<story id> — story id harus menang atas fbid
+  ["https://www.facebook.com/photo?fbid=1483436860484357&set=pcb.1483436933817683", ["1483436933817683", "1483436860484357"], true],
+  ["https://www.facebook.com/kominfojember/posts/pfbid02oqmBrVwpYWoUhRCaoMbwGUqwzUz7375c3cZVmr5Zbih6BeHUVZ8GQCcz8xtSJCiPl", ["pfbid02oqmBrVwpYWoUhRCaoMbwGUqwzUz7375c3cZVmr5Zbih6BeHUVZ8GQCcz8xtSJCiPl"], true],
+  ["https://www.facebook.com/metalwavewebzine/photos/a.10223953348016180.1829884567", ["1829884567"], true],
+  ["https://www.facebook.com/photos/123456789012345", ["123456789012345"], true],
+  ["https://www.facebook.com/videos/10151234567890123", ["10151234567890123"], true],
+  ["https://www.facebook.com/reel/1076159001615150", ["1076159001615150"], true],
+  ["https://www.facebook.com/watch?v=3762250110740268", ["3762250110740268"], true],
+  ["https://www.facebook.com/watch/?v=1467518380953415", ["1467518380953415"], true],
+  ["https://www.facebook.com/watch/live/?ref=watch_permalink&v=10151234567890123", ["10151234567890123"], true],
+  ["https://www.facebook.com/video.php?v=10151234567890123", ["10151234567890123"], true],
+  ["https://www.facebook.com/media/set/?set=a.2286037437005.2137559.1430993860", ["1430993860"], true],
+  ["https://www.facebook.com/media/set/?set=a.1293535879446466&type=3", [], false],
+  ["https://www.facebook.com/100000123456789", [], false],
+  ["https://www.facebook.com/profile.php?id=100000123456789", [], false],
+  ["https://www.facebook.com/", [], false],
+  ["https://www.facebook.com/groups/x", [], false],
+  [null, [], false],
+  ["", [], false],
+];
+
+test("BEHAVIOR: fburls — ekstraksi id + isPostPage per bentuk URL", () => {
+  for (const [url, wantIds, wantPage] of FB_URL_CASES) {
+    assert.deepEqual(
+      URLS_FNS.extractFbFeedbackIds(url),
+      wantIds,
+      `ids for ${url}`
+    );
+    assert.equal(URLS_FNS.isFacebookPostPage(url), wantPage, `page for ${url}`);
+    assert.equal(
+      URLS_FNS.extractFbFeedbackId(url),
+      wantIds.length ? wantIds[0] : null,
+      `first for ${url}`
+    );
+  }
 });
 
 // ---- PANELTOOLS behavior fixtures (filter/sort/CSV/merge) ----

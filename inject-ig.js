@@ -508,6 +508,17 @@
       try {
         data = JSON.parse(text);
       } catch {
+        // Sesi berakhir → IG me-redirect ke halaman login (HTML 200); fetch
+        // mengikuti redirect, jadi cabang 302/401 di atas tak pernah terlihat.
+        // Diagnosis bersih, bukan dump HTML mentah ke user.
+        const head = String(text || "").trim().slice(0, 300).toLowerCase();
+        if (/^<!doctype html|^<html/.test(head)) {
+          const err = new Error(
+            "Login Instagram diperlukan (sesi berakhir) — buka instagram.com, login, lalu Proses lagi."
+          );
+          err.loginRequired = true;
+          throw err;
+        }
         throw new Error(`Respons bukan JSON: ${text.slice(0, 120)}`);
       }
       if (data && data.status === "fail") {

@@ -330,3 +330,438 @@ Kritik mendalam 2026-08-11 (dari audit menyeluruh seksi 8.2 + verifikasi kode):
 5. **P3 #5 (double-render)**: ✅ Fixed — poll 1,2 dtk dihapus (onChanged session sudah mencakup semua `setState`).
 6. **P3 #6 (filter 0-match)**: ✅ Fixed — count "X dari N" saat filter aktif.
 7. **P3 #7 (FAB title)**: ✅ Fixed — title/aria dinamis di 3 panel.
+
+## 11. Audit Mendalam Facebook + Riset Permalink — 2026-08-11 (v1.0.27)
+
+### 11.1 Ringkasan eksekutif
+Audit membaca `inject-fb.js` utuh (1.739 baris), jalur `startFacebook` → `START_EXTRACT` → `runExtract` di background/content, plus 3 salinan deteksi URL permalink. **Kesimpulan: engine GraphQL-nya kuat (backoff 429, retry jaringan, guard no_login, budget request, DOM fallback), tapi deteksi permalink punya celah nyata — terutama untuk bentuk URL yang justru paling umum dipakai saat ini (`/watch?v=`, slug posts, album `/media/set/`).** Verifikasi lapangan di browser asli tetap wajib — audit ini berbasis kode + bentuk URL yang terkonfirmasi riset web.
+
+### 11.2 Riset — bentuk URL permalink FB 2025/2026 (per jenis postingan)
+Tabel hasil riset web (contoh URL riil ditemukan di index Google, 2026-08-11):
+
+| Jenis postingan | Bentuk URL permalink | Didukung? | Catatan |
+|---|---|---|---|
+| **Teks** (post biasa) | `facebook.com/<page>/posts/<id>` | ✅ | `id` = feedback/story id — benar untuk synthetic query |
+| **Teks** (gaya baru) | `facebook.com/<page>/posts/<slug>/<id>` | ❌ **MISS** | FB kini memakai slug + id numerik di akhir (contoh riil: `LaraFabianTheNetherlands/posts/2-photos-source-.../960401149426609/`). Regex `/posts/\d+` tidak cocok karena ada slug |
+| **Teks** (grup) | `facebook.com/groups/<gid>/posts/<id>` (dan versi slug) | ✅ / ⚠️ | `/posts/<id>` cocok; versi slug sama-sama MISS |
+| **Teks** (legacy) | `permalink.php?story_fbid=<id>&id=<page>` | ✅ | `story_fbid` = feedback id — benar |
+| **Teks** (legacy) | `story.php?story_fbid=<id>` | ✅ | Benar |
+| **Foto tunggal** (legacy) | `photo.php?fbid=<id>&set=a.<album>.<user>.<story>` | ✅ | `fbid` dipakai langsung — OK untuk post 1 foto |
+| **Foto / album (kolektif)** | `media/set/?set=a.<album>.<user>.<story>` (+ `&type=3`) | ❌ **MISS** | Story id ada di komponen ke-3 (`a.757108353089224.1812885352.1020472719478` → ambil `1020472719478`). Tanpa ini, album tidak bisa synthetic-paginate |
+| **Foto / album** (gaya baru) | `<page>/photos/a.<uid>.<fbid>` | ❌ **MISS** | `fbid` = segmen terakhir setelah titik — komentar album ada di story ini |
+| **Foto** (permalink foto) | `<page>/photos/<photo_id>` | ⚠️ | Cocok, tapi `<photo_id>` ≠ story id → synthetic pakai id salah (GraphQL error/wrong thread) |
+| **Video** (watch, paling umum) | `facebook.com/watch?v=<id>` / `watch/?v=<id>` | ❌ **MISS** | Bentuk watch aktual adalah `?v=`, bukan `/watch/<id>`. Regex `\/watch\/\d+` tidak pernah cocok |
+| **Video live** | `facebook.com/watch/live/?ref=watch_permalink&v=<id>` | ❌ **MISS** | Sama — `v=` query param tidak dicek |
+| **Video** (legacy) | `video.php?v=<id>` | ❌ **MISS** | `v` tidak termasuk param yang dicek |
+| **Video** (halaman video) | `<page>/videos/<id>` | ✅ | Video id umumnya == story id — OK |
+| **Reel** | `facebook.com/reel/<id>` | ✅ | OK |
+| **Short link** | `fb.watch/<code>` | ⚠️ redirect | Redirect ke `/watch?v=` atau `permalink.php`; setelah redirect tab URL jadi bentuk di atas — gap `watch?v=` ikut terkena |
+| **Profil** (bukan post!) | `facebook.com/<8+ digit user id>` | ❌ **FALSE POSITIVE** | Regex pathname `^\d{8,}$` menyangka ini halaman post → badge "API siap" + synthetic query dengan user id → probe gagal |
+
+### 11.3 Temuan kode — 3 salinan deteksi URL (drift + gap identik)
+Deteksi permalink diduplikasi di 3 tempat dengan pola yang sama, dan ketiganya punya gap yang sama:
+1. `shared.js` `isFacebookPostPage(url)` (baris ~61–91) — dipakai panel/popup.
+2. `inject-fb.js` `feedbackIdFromUrl()` — dipakai synthetic template (pagination tanpa capture).
+3. `content-fb.js` `fbGraphqlReady()` (badge "API komentar: siap") — salinan ketiga.
+
+Perbedaan halus yang terverifikasi:
+- **Dead branch di inject-fb.js**: regex `^\/(\d{8,})` di-*anchor* ke awal string `location.href` ("https://…") → **tidak pernah cocok**. Untungnya menyelamatkan dari false positive user-id, tapi itu kebetulan, bukan desain.
+- **False positive di shared.js & content-fb.js**: cek `new URL(href).pathname` terhadap `^\d{8,}$` **aktif** → halaman profil `facebook.com/100000123456789` dilaporkan sebagai post page (badge hijau + synthetic dengan id user).
+
+### 11.4 Temuan per jenis postingan (dampak ke user)
+1. **Teks**: Aman di bentuk lama; **slug-posts gaya baru gagal synthetic** → run mengandalkan capture+DOM saja. Dampak nyata: di permalink slug, badge bilang "belum" padahal halaman sah, dan pagination GraphQL aktif hanya kalau user sudah membuka komentar dulu.
+2. **Foto/gambar kolektif (album)**: **Paling lemah.** `media/set/?set=a.X.Y.Z` dan `photos/a.U.F` tidak dikenali sama sekali; `photos/<photo_id>` dikenali tapi id-nya id foto, bukan id story — synthetic query ke feedback yang salah. Komentar album (yang berisi kolektif gambar) praktis hanya bisa lewat capture+DOM.
+3. **Video**: `/videos/<id>` dan `/reel/<id>` aman; **dua bentuk paling umum — `/watch?v=` dan `video.php?v=` — tidak dikenali** → sama seperti slug-posts: badge "belum", synthetic tidak terbentuk. Ironis: v1.0.14+ memperkuat video, tapi deteksi URL-nya tertinggal.
+4. **Profil user-id**: false positive → user di halaman profil melihat badge "API komentar: siap" dan Proses membuang 1–2 request probe sebelum jatuh ke DOM kosong.
+
+### 11.5 Temuan robustness lain (bukan URL)
+1. **Tidak ada filter feedbackId** (setara `mediaId filter` IG yang sudah diperbaiki di v1.0.15). `orderedCandidates()` hanya memilah by shape + recency, **tanpa mencocokkan `variables.feedbackID`/`feedback_id`/`id` template terhadap `feedbackIdFromUrl()`**. Di halaman permalink dengan konten sidebar/iklan, engine bisa mem-paginate template komentar **postingan lain** yang kebetulan ter-capture. Rekomendasi: saat URL memberi feedback id, urutkan candidate yang id-nya cocok di depan (fallback ke semua bila tak ada yang cocok) — pola yang sama dengan guard template IG/TikTok.
+2. **Probe gagal → tetap paginate**: jika semua probe error non-429/non-login, kode lanjut `template = candidates[0]` dan terus paginate (sampai budget). Dengan filter (11.5.1) risiko memaginate thread salah berkurang drastis.
+3. **HTTP 200 + `errors` GraphQL tidak didiagnosis**: `findPageInfo` null → 2× retry cursor sama → reason "idle" → DOM. User tak diberi tahu bahwa feedback id-nya salah/tidak publik. Cek `errors` array di respons akan menghemat waktu & request.
+4. **`findPostRoot` di halaman watch/album**: pagelet watch (`CometWatchFeedQuery` dst) dan album tidak cocok dengan selector `data-pagelet*="Permalink"`/`CometSinglePost` → jatuh ke `[role=main]`. DOM tetap jalan, tapi scoping kurang presisi.
+5. **Reply template classification** berbasis nama (`reply|depth1|replies`) — masuk akal, tapi query balasan modern yang bernama tanpa kata kunci itu bisa salah klasifikasi jadi top-level; dampak kecil (hanya urutan candidate).
+
+### 11.6 Yang sudah benar (diverifikasi di kode)
+- `graphqlReplayWithBackoff`: 429 hormati `Retry-After` (cap 20 dtk) + eskalasi 8→16 dtk, maks 2 retry, hanya jika sisa waktu cukup; retry 1× untuk blip jaringan; heartbeat PROGRESS saat menunggu.
+- Deteksi `no_login` ganda: `res.redirected` ke /login **dan** body HTML login dengan HTTP 200.
+- Budget request (350) + batas halaman (120) + batas balasan (40) — akun tidak di-hammer.
+- Synthetic template memakai variabel kontrak nyata (`CometUFICommentsProviderPaginationQuery`-style: feedbackID, count, cursor, feedbackSource 44, actionSource, queryPath "/comments/pagination/", dll.) — cocok dengan pola scraper publik.
+- Token anti-forgery ringan & di-cache 5 menit (require → scan `<script>` terbatas → form → innerHTML fallback).
+- Reply harvest via `feedback.replies_fields.total_count` + antrean unik (maks 25 thread, 8 halaman/thread).
+- `findFeedbackIds` memanen id `feedback:*` dari respons — dasar untuk perbaikan 11.5.1.
+
+### 11.7 Rekomendasi prioritas (usulan v1.0.28)
+| # | Prioritas | Perbaikan |
+|---|---|---|
+| **P0** | Satu sumber deteksi URL | `extractFbFeedbackId(url)` di shared.js (blok marker baru, mis. `FBURLS`) + byte-copy ke `inject-fb.js` & `content-fb.js`, di-fixture-test (layout + parity + behavior). Ketiga konsumen (badge, synthetic, pre-check) otomatis sinkron |
+| **P0** | Tutup bentuk URL yang MISS | Tambah: `watch?v=`, `watch/?v=`, `watch/live/?v=`, `video.php?v=`, `media/set/?set=a.X.Y.Z` (ambil Z), `photos/a.U.F` (ambil F), `posts/<slug>/<id>` (ambil id akhir); buang false positive bare numeric pathname |
+| **P1** | Filter feedbackId (setara IG v1.0.15) | `orderedCandidates()` cocokkan `variables.feedbackID/feedback_id/id` terhadap `extractFbFeedbackId()` saat tersedia; plus deteksi `errors` GraphQL → stop dini dengan pesan jelas |
+| **P2** | Badge akurat | Badge "API komentar" memakai `extractFbFeedbackId` — hijau hanya pada bentuk permalink yang benar-benar di-support (bukan profil, bukan watch yang tak dikenali) |
+
+**Verifikasi lapangan wajib** (tidak bisa dari sini): buka masing-masing bentuk URL di atas di browser + login, jalankan Proses, cek hasil. Khusus album multi-foto: pastikan synthetic feedback id = story id (komponen terakhir `set=a.`), bukan album id.
+
+### Status eksekusi — ✅ v1.0.28 (2026-08-11, setelah laporan lapangan)
+Laporan lapangan user: "klik gambar 1 di postingan gambar kolektif → permalink API tidak ditemukan; foto/video tunggal sekali klik langsung dapat" — persis gap 11.2/11.4. Eksekusi:
+1. **P0 (satu sumber)**: ✅ Fixed — blok `FBURLS` (`extractFbFeedbackIds`/`extractFbFeedbackId`/`isFacebookPostPage`) di shared.js; byte-copy ke `inject-fb.js` & `content-fb.js`; fixture test layout + parity 3 salinan + behavior 22 kasus URL. Badge FB (`fbGraphqlReady`) kini tinggal `isFacebookPostPage(location.href)`.
+2. **P0 (tutup bentuk URL)**: ✅ Fixed — `posts/<slug>/<id>`, `watch?v=`/`watch/?v=`/`watch/live/?v=`, `video.php?v=`, `media/set/?set=a.X.Y.Z` (ambil Z), `photos/a.U.F` (ambil F), nilai pfbid alfanumerik di `story_fbid`/`fbid`; false positive bare numeric pathname dihapus (profil `facebook.com/<user id>` → false).
+3. **P1 (filter feedbackId)**: ✅ Fixed — `orderedCandidates` mengutamakan template (capture + synthetic) yang `variables.feedbackID/feedback_id/id`-nya cocok dengan id URL; synthetic **selalu** ditambahkan saat URL memberi id (bukan hanya saat tak ada capture) → halaman album/watch/slug langsung paginate tanpa perlu komentar ter-capture. Plus deteksi `errors` array GraphQL → `kind=graphql_error`, probe kandidat berikutnya (bukan diam-diam "idle").
+4. **P2 (badge akurat)**: ✅ Fixed — badge hijau hanya untuk bentuk permalink yang didukung; profil/feed/watch-bare → "belum".
+
+Catatan jujur: untuk `photos/<photo_id>` (permalink foto tunggal bentuk lama), id di URL adalah id foto — kandidat di-probe; bila salah, kandidat lain (mis. dari `set=`) di-probe berikutnya, lalu DOM fallback. Verifikasi lapangan bentuk album (setelah fix) tetap wajib: buka album → klik gambar 1 → Proses → cek badge & hasil.
+
+**Amendemen v1.0.28 — temuan lapangan URL multi-foto (`set=pcb.`)**: user melampirkan URL DevTools riil saat klik gambar 1 di postingan gambar kolektif: `facebook.com/photo?fbid=1483436860484357&set=pcb.1483436933817683` (post induk: `kominfojember/posts/pfbid02oqm…`). Temuan: ① path `/photo` (tanpa `.php`) — sudah tertangkap via param `fbid`; ② prefix `set=pcb.` = *photo collection bundle* (postingan multi-foto), id setelah `pcb.` adalah **story id postingan** — blok FBURLS sebelumnya hanya mengenal prefix `a.` sehingga story id tidak diekstrak dan probe menyasar `fbid` (id foto) yang salah. Perbaikan: `set=pcb.<story>` diekstrak dengan prioritas **di atas** `fbid` (urutan param: story_fbid → pcb-story → fbid → v → a-story); `posts/<pfbid>` juga diuji. Parity 3 salinan tetap hijau; kasus URL riil masuk fixture test (22 → 24 kasus).
+
+## 12. Redesign Flat Minimal — v1.0.29 (2026-08-11)
+
+Konteks user: "rombak tampilan — minimalis, clean, simple, flat; pakai icon/indikator
+daripada kalimat keterangan; pakai Google icon; widget default tidak terbuka &
+mengambang (menutupi halaman saat scroll)."
+
+### Keputusan desain
+- **Ikon Material Symbols Rounded (Google Fonts)** — satu stylesheet dimuat di
+  popup/options (`<link>`) dan di-inject ke halaman host (FB/TT/IG) oleh content
+  script via `ensureIconFont()` (id `rs-ms-font`, sekali). Kelas `.rs-ic` di
+  kelima stylesheet. Keterbatasan jujur: di halaman host, pemuatan font bergantung
+  CSP situs — jika diblokir, ikon kosong (tooltip `title` tetap menjelaskan).
+- **Tombol aksi → ikon-only** di panel & popup: play_arrow/progress_activity
+  (Proses), stop, content_copy (Copy), download (CSV), merge_type (Gabung),
+  restart_alt (Reset), sort (Urut), close (Tutup), forum (FAB & Balasan),
+  check_circle/error (badge Siap/Belum), facebook/music_note/instagram (logo).
+- **Badge API → ikon + kata pendek** (sebelumnya kalimat "API komentar: siap —
+  buka permalink post").
+- **Flat**: header panel tanpa gradien (kartu + border-bottom), FAB solid tanpa
+  gradien & shadow besar, popup/options header flat.
+
+### Widget default tertutup (temuan kode — dibaca langsung)
+| Platform | Sebelum | Sesudah |
+|---|---|---|
+| FB | Default `fnk-collapsed`, tapi **auto-expand** saat run selesai (`NAMES_DONE`) dan saat boot restore | Selalu tertutup; buka via FAB / ikon bar Like |
+| TikTok | **Terbuka sejak load** (tanpa kelas collapsed) | `tnk-collapsed` default |
+| Instagram | **Terbuka sejak load** (tanpa kelas collapsed) | `ing-collapsed` default |
+
+Hasil tetap terlihat di badge jumlah FAB (data-count) — tidak ada info yang hilang.
+
+### Catatan
+- Parity blok marker (`NORMALIZE`/`DONEMSG`/`PARSERS`/`PANELTOOLS`/`FBURLS`)
+  tidak tersentuh — fixture test tetap hijau (74/74).
+- Verifikasi visual di browser asli tetap wajib (popup: klik ikon ekstensi; panel:
+  buka FB/TT/IG → FAB → tombol ikon; pastikan font Material termuat).
+
+## 13. Audit Pertama Instagram + Standar Konsistensi — v1.0.30 (2026-08-11)
+
+Konteks user: "audit IG, buat aturan konsistensi tampilan & respon agar audit
+selanjutnya dan perbaikannya seragam; seragamkan tampilan tiap fitur di tiap
+sosmed; mulai audit pertama IG." → Standar hidup dibuat di **CONSISTENCY.md**;
+seksi ini memakai checklist-nya untuk audit IG.
+
+### Lingkup yang dibaca (bukan tebakan)
+- `content-ig.js` (1084 baris) + `content-ig.css` — panel, badge, boot/restore, nav
+- `inject-ig.js` (1085 baris) — engine replay `api/v1/media/{id}/comments/`
+- `background.js` — GET_STATE/GET_TEMPLATE/SET_STATE, webRequest capture IG, startInstagram
+- `shared.js` — `sanitizeInstagramTemplateUrl`, `isInstagramTemplateValid`, DONEMSG/PARSERS
+- `popup.js`/`options.js` — badge IG di popup, default includeReplies
+
+### Temuan yang DIPERBAIKI di v1.0.30 (inkonsistensi lintas platform)
+1. **Header panel FB & TT masih gradien** (`content-fb.css:515` `linear-gradient
+   #1877f2→#0a5fd4`; `content-tiktok.css:423` `#fe2c55→#d61f42`) — redesign flat
+   v1.0.29 hanya diterapkan penuh di IG. Ini inkonsistensi tampilan terbesar yang
+   terlihat langsung: 3 panel mestinya satu bahasa visual. → Gradien dihapus,
+   header flat `var(--rs-card)` di ketiga platform.
+2. **`userCollapsed` di content-fb.js = kode mati** — hanya ditulis (min/fab/Esc/
+   chip), tidak pernah dibaca sejak v1.0.29 menghapus auto-expand. → Dihapus.
+3. **Pesan copy FB menyebut `names.length` di fallback** (bukan `vis.length` seperti
+   TT/IG) — saat filter aktif, jumlah yang dilaporkan salah. → Dikoreksi.
+4. **Ternary mati di stopExtract TikTok** (`list.length ? doneMessage(..., length)
+   : doneMessage(..., 0)`) — fungsi menangani 0 sendiri. → Sederhanakan.
+5. **Komentar basi** di boot TT/IG: "Default visibility: expanded saat ada hasil
+   tersimpan" — salah sejak v1.0.29 (panel tidak pernah auto-buka). → Dikoreksi.
+6. **Deteksi halaman login HTML** di engine IG: `fetch` mengikuti redirect, jadi
+   cabang `res.status === 302` di `fetchJson` adalah dead code; sesi berakhir
+   mendarat di halaman login HTML (200) → JSON.parse gagal → user melihat
+   "Respons bukan JSON: <!DOCTYPE html...". → Deteksi `<!doctype html` →
+   `loginRequired` → pesan bersih "Login Instagram diperlukan (sesi berakhir)".
+
+### Yang sudah kuat (diverifikasi — dari v1.0.15–1.0.29)
+- **Media id filter**: replay menulis ulang segmen `/api/v1/media/{id}/` dari
+  halaman (mediaId diutamakan) — tidak menyasar media asal template.
+- **Budget per-run**: 150 request top-level + 40 balasan (tidak saling memakan).
+- **Backoff 429** hormati `Retry-After` (cap 30 dtk, eskalasi 8s→16s, maks 2 retry,
+  hanya bila sisa waktu cukup) + heartbeat PROGRESS selama menunggu.
+- **Diagnosis akurat**: 403 → `blocked` (bukan "login"); `PleaseWaitFewMinutes` →
+  `rate_limit`; `FeedbackRequired` → `rate_limit` + pesan "akun dibatasi";
+  checkpoint → `checkpoint`; 404 reply endpoint → fallback
+  `inline_child_comments` ↔ `child_comments`.
+- **Pre-check**: login (cookie sessionid) + halaman (shortcode) sebelum START;
+  cooldown 15 dtk antar-run / 60 dtk setelah rate limit.
+- **Badge**: re-validasi TTL+shape di `storage.onChanged` (pola TT/IG v1.0.27);
+  boot menerapkan `hasTemplate` tanpa syarat dari GET_STATE.
+- Pacing antarpage 1,8–3,2 dtk; empty-page retry 2×; sleep interruptible.
+
+### Temuan yang TETAP TERBUKA (rekomendasi, butuh verifikasi lapangan)
+- **Badge IG tidak bisa cek same-media**: TT memfilter template dengan `awemeId`;
+  IG tidak punya media id di content script (hanya shortcode) → badge "Siap" bisa
+  tampil untuk template post lain. Mitigasi saat ini: engine menulis ulang
+  media_id dari halaman. Opsi P2: `extractMediaIdFromPage` juga cocokkan pola
+  `"id":"\d+"` dekat `xdt_api__v1__media` (perlu fixture lapangan).
+- **Media id dari halaman** masih best-effort; bila gagal, replay memakai media
+  asal template. Risiko kecil bila template di-capture di post lain tanpa buka
+  komentar. (Guard webRequest hanya aktif saat run berjalan.)
+- **`GET_TEMPLATE` IG mengembalikan `sameVideo: true` tanpa syarat** — flag
+  menyesatkan (tidak dipakai badge IG, tapi kode baru jangan meniru).
+- Verifikasi visual & lapangan wajib user: buka post/reel → FAB → panel flat;
+  jalankan Proses tanpa login → pesan no_login bersih; sesi kedaluwarsa di
+  tengah run → pesan "Login Instagram diperlukan (sesi berakhir)".
+
+### Catatan
+- Standar yang dipakai di seksi ini: **CONSISTENCY.md** (seksi 4 checklist).
+- Blok marker tidak tersentuh — fixture test tetap hijau (74/74) setelah v1.0.30.
+
+## 14. Audit Facebook — Konsistensi (v1.0.31, 2026-08-11)
+
+Audit kedua dengan checklist **CONSISTENCY.md** (seksi 4) — fokus: menyamakan
+FB dengan standar yang sudah dipakai IG/TT. (Audit teknis permalink FB pertama:
+seksi 11.)
+
+### Lingkup yang dibaca (bukan tebakan)
+- `content-fb.js` (1341 baris) + `content-fb.css` — panel, badge URL, chip bar Like
+- `inject-fb.js` (1859 baris) — engine GraphQL (synthetic FBURLS, backoff, budget,
+  DOM fallback)
+- `background.js` — startFacebook, GET_STATE, NAMES_DONE, statusFromReason
+- popup.js (badge FB URL) · shared.js (FBURLS, DONEMSG)
+
+### Temuan yang DIPERBAIKI di v1.0.31
+1. **Pre-check login FB tidak ada** (beda dari IG/TT yang cek cookie `sessionid`
+   sebelum START) — FB hanya mendeteksi no_login di tengah run via probe
+   (redirect/HTML login). → `CHECK_FB_LOGIN` (cookie `c_user`) di background +
+   pre-check di `startFacebook` (popup/shortcut/context-menu) & `startExtract`
+   panel — pola gagal cepat yang identik dengan IG/TT.
+2. **Cooldown antar-run hanya di IG** — FB/TT langsung menerima Proses beruntun
+   (pemicu 429). → `COOLDOWN_MS` 15 dtk / `COOLDOWN_RATE_LIMIT_MS` 60 dtk
+   (nilai & pesan identik dengan IG) di content-fb & content-tiktok;
+   `lastRunEndAt`/`lastRateLimitAt` di-set di DONE + stopExtract.
+3. **`--rs-text-dim` tidak terdefinisi** di ketiga CSS (dipakai warna daftar
+   preview) — fallback ke warna inherit alih-alih dim. → `var(--rs-muted)`
+   (token yang terdefinisi di semua konteks tema) di 3 file.
+4. **`mapDoneStatus` FB tidak memetakan `no_template` secara eksplisit**
+   (reason nyata dari `paginateGraphql` saat semua template berbentuk reply) —
+   lolos lewat fallthrough `count ? done : error`. → masuk grup error eksplisit
+   (parity pola mapDone IG/TT).
+5. **Hint panel FB basi**: "Tombol N (pojok kanan)…" — merujuk FAB huruf dari
+   pra-v1.0.29 (FAB kini ikon `forum`). → "Buka permalink post, buka komentar,
+   lalu Proses." (gaya panduan URL yang dipakai TT/IG).
+6. **Elemen count FB kosong saat render awal** (TT "0 nama", IG "0 username") →
+   `0 nama` (parity struktur).
+
+### Yang sudah kuat (diverifikasi ulang)
+- Badge URL via FBURLS (synthetic) — re-render pada navigasi, tanpa storage
+  mentah; popup & panel memakai sumber yang sama.
+- Engine: probe kandidat (filter feedbackId anti salah post), backoff 429
+  hormati Retry-After (cap 20 dtk, 8s→16s), retry jaringan 1×, deteksi `errors`
+  GraphQL, no_login via redirect **dan** body HTML login 200, budget 350 +
+  120 halaman + 40 balasan, sleep interruptible.
+- Pesan akhir via DONEMSG; tip platform-aware saat nol hasil.
+
+### Temuan yang TETAP TERBUKA (rekomendasi)
+- `userCollapsed` sudah dibersihkan (v1.0.30) — tidak ada lagi sisa auto-expand.
+- Chip bar Like hanya ada di FB (FAB universal di semua platform) — sesuai
+  CONSISTENCY.md 1.1 (entry ekstra hanya boleh "buka panel"); TT/IG bisa
+  mendapat chip serupa bila diinginkan (butuh riset DOM per platform).
+- Verifikasi lapangan wajib: logout FB → Proses → pesan no_login cepat;
+  Proses beruntun → pesan cooldown; panel FB vs TT vs IG berdampingan → identik.
+
+### Catatan
+- Blok marker tidak tersentuh — fixture test tetap hijau (74/74) setelah v1.0.31.
+
+
+## 15. Audit TikTok — Konsistensi (v1.0.32, 2026-08-11)
+
+Audit ketiga dengan checklist **CONSISTENCY.md** (seksi 4) — TikTok adalah
+platform terakhir yang diaudit dengan standar seragam.
+
+### Lingkup yang dibaca (bukan tebakan)
+- `inject-tiktok.js` (878 baris) — engine replay `api/comment/list`
+- `content-tiktok.js` + `content-tiktok.css` — panel, badge (awemeId), boot
+- `background.js` — capture webRequest, GET_TEMPLATE (strict awemeId + replay),
+  startTikTok pre-check
+- `shared.js` — sanitize/validasi template TT, DONEMSG/PARSERS
+
+### Hasil: TikTok sudah paling selaras — hanya 1 celah nyata
+Sebagian besar checklist sudah terpenuhi sejak v1.0.14/v1.0.27/v1.0.31:
+- **Panel**: struktur/urutan/ikon/token identik, flat, default tertutup, FAB +
+  badge jumlah, hint "Buka URL /@user/video/...".
+- **Badge**: `refreshTemplateFlag` dengan `awemeId` (v1.0.27) — template video
+  lain ditolak; re-validasi di `storage.onChanged`; boot menerapkan hasTemplate
+  tanpa syarat.
+- **Pre-check**: login (cookie `sessionid` via CHECK_TT_LOGIN + startTikTok) &
+  halaman (`awemeId`); cooldown 15/60 dtk (v1.0.31).
+- **Engine**: budget 350 + 40 balasan (cap terpisah), backoff 429 hormati
+  Retry-After (cap 20 dtk, 8s→16s, maks 2 retry, hanya bila sisa waktu cukup),
+  retry jaringan 1×, empty-page retry 2×, `payloadMatchesVideo` (intercept
+  anti video lain), sleep interruptible, stopReason lengkap (termasuk
+  no_video/no_template — semua dipetakan `mapDone` content-tiktok).
+
+### Temuan yang DIPERBAIKI di v1.0.32
+1. **Deteksi halaman login HTML di `fetchJson`**: 401 JSON sudah jadi
+   `no_login`, tapi sesi berakhir yang me-redirect ke halaman login (HTML 200)
+   → "Respons bukan JSON: <!DOCTYPE html...\" (dump mentah). → Deteksi
+   `<!doctype html` → `no_login` bersih (parity IG v1.0.30 / FB redirect+HTML).
+2. **Sanitasi snippet error non-OK**: `API <status>: <text.slice>` bisa
+   membocorkan HTML mentah → diganti "halaman HTML (kemungkinan login/error)"
+   bila respon berbentuk HTML (aturan CONSISTENCY.md 2.5: jangan dump mentah).
+
+### Yang TETAP TERBUKA (rekomendasi)
+- Chip pembuka panel ala FB (bar aksi video) belum ada di TT/IG — FAB universal
+  sudah memenuhi standar; chip hanya penambah kenyamanan (butuh riset DOM).
+- Pacing TT (0,7–1,6 dtk) lebih cepat dari IG (1,8–3,2 dtk) — disengaja
+  (platform rapuh = lebih lambat); amati 429 berulang → naikkan ke nilai IG. (DIEKSEKUSI v1.0.33 — pacing TT kini identik dengan IG: antar-halaman 1,8–3,2 dtk; balasan 1,4–2,4 dtk + jeda antar-thread 1,1–2,0 dtk; retry halaman kosong 2,5 dtk. Catatan: maxMs TT tetap 120 dtk vs IG 150 dtk — samakan bila mau coverage setara.)
+- Verifikasi lapangan wajib: logout TT → Proses → pesan no_login cepat;
+  sesi kedaluwarsa di tengah run → pesan "Sesi TikTok tidak aktif (login)";
+  panel TT vs FB vs IG berdampingan → identik.
+
+### Catatan
+- Blok marker tidak tersentuh — fixture test tetap hijau (74/74) setelah v1.0.32.
+- **Status konsistensi 3 platform kini penuh**: panel, badge, pre-check,
+  cooldown, backoff, diagnosis error (termasuk HTML login) ✅ FB/TT/IG.
+
+
+## 16. Audit Lintas Permukaan — Ketidakseragaman (v1.0.34, 2026-08-11)
+
+Membandingkan semua permukaan (popup, options, 3 panel, background, shared)
+secara berdampingan — melengkapi audit per-platform (seksi 13–15).
+
+### DIPERBAIKI di v1.0.34
+1. **Toggle "Balasan" di panel tidak menyimpan pref** — popup kirim SET_STATE
+   seketika (pref tersimpan), panel hanya ubah variabel lokal (baru tersimpan
+   saat run dimulai). → Ketiga panel kini kirim `SET_STATE {includeReplies}`
+   seketika (parity popup).
+2. **Prefix hint tidak seragam**: TT panel & popup "Video:", FB/IG "Target:".
+   → Semua "Target:".
+3. **Pesan reset/idle drift** antara panel dan background: FB panel "Buka 1
+   postingan, lalu klik Proses." vs background "…1 postingan Facebook…"; IG
+   panel "…pastikan login, lalu klik Proses." vs background "…sudah login…".
+   → Disamakan (FB/IG mengikuti wording background; TT sudah cocok).
+4. **Dot status "stopped" popup = amber** (sama partial) padahal tabel
+   CONSISTENCY.md 1.4: stopped → accent (count panel + FAB hijau saat ada
+   hasil). → popup.css stopped dot → accent.
+5. **Attr `checked` mati** di checkbox Balasan FB (render() selalu override) —
+   TT/IG tidak punya. → Dihapus (parity struktur).
+6. **Title tombol Gabung**: popup "Gabung FB+TikTok+IG" vs panel "Gabung FB +
+   TikTok + IG lalu salin". → Disamakan.
+
+### Sengaja dibedakan (dokumentasi, bukan ketidakseragaman)
+- **Default includeReplies**: FB on, TT/IG off — keputusan produk (thread balasan
+  FB dalam; TT/IG lebih rentan); dapat diubah di Options.
+- Backup/restore hanya di popup (ruang panel terbatas).
+- Chip pembuka panel hanya di FB (bar Like); FAB universal di semua platform.
+- `run_at` content: FB `document_start` (capture GraphQL sejak awal), TT/IG
+  `document_idle`.
+- Badge IG tak bisa cek same-media (media id tak ada di content script) —
+  mitigasi: engine menulis ulang media_id dari halaman.
+- Field state internal `videoHint` (TT) vs `postHint` (FB/IG) — tidak tampil
+  ke user; prefix tampilan kini seragam "Target:".
+- Pacing TT = IG (v1.0.33); `maxMs` TT 120 dtk vs IG 150 dtk.
+
+### Catatan
+- Tidak ada blok marker yang tersentuh — fixture test tetap hijau (74/74).
+
+## 17. Audit & Riset: Sortir Komentar FB + Scroll Lintas Post — v1.0.35 (2026-08-11)
+
+Konteks user: (1) tanpa ganti ke "Semua Komentar", hanya komentar di mode itu
+yang ter-rekap (Paling Relevan / Terbaru); (2) walau sudah "Semua Komentar",
+tanpa scroll sampai bawah tidak semua ter-rekap; (3) kadang di akhir run
+halaman ke-scroll ke postingan sebelum/bawahnya (terutama di post terbaru
+profil/feed).
+
+### Riset sortKey (sumber: Apify OpenAPI facebook-comments-scraper, Goro
+facebook-comments, yashodhank/actor-facebook-scraper, dump FB UFI intern)
+- Query pagination komentar FB (`CometUFICommentsProviderPaginationQuery`)
+  menerima variabel **`sortKey`** dengan enum:
+  - `RANKED_THREADED` — "Paling Relevan" (default bila sortKey tidak dikirim)
+    → HANYA sebagian komentar + pagination berhenti dini. **Ini akar masalah 1**
+    (synthetic template lama tidak mengirim sortKey).
+  - `RANKED_UNFILTERED` — "Semua Komentar" (kronologis, unfiltered).
+  - `RECENT_ACTIVITY` — "Terbaru" (aktivitas terbaru di atas).
+- Template capture membawa sortKey mode yang sedang dipilih user → replay
+  mengikuti mode itu (masalah 1 saat mode "Paling Relevan").
+- Alasan masalah 2 (scroll memengaruhi hasil): dengan mode default, FB
+  mengembalikan subset + `hasNext:false` lebih awal — bukan karena scroll
+  itu sendiri; memaksa `RANKED_UNFILTERED` menyelesaikannya.
+
+### Penyebab masalah 3 (scroll ke postingan lain) — dibaca langsung dari kode
+- `expandDomLoop`: fallback `window.scrollBy(0, 350)` menggeser HALAMAN (di
+  feed/profil = pindah ke postingan berikutnya), `findExpandButtons(document)`
+  mengklik "lihat komentar lain" di post lain, `scrapeDomNames(document)`
+  memanen nama post lain → kontaminasi lintas post.
+- `tryOpenComments`: `scrollIntoView({block:"center"})` menggeser halaman agar
+  tombol komentar di tengah (di post teratas profil = melayang ke post bawah)
+  dan tidak pernah dikembalikan.
+
+### Perbaikan v1.0.35 (inject-fb.js)
+1. Synthetic template memuat `sortKey: "RANKED_UNFILTERED"` — semua komentar
+   tanpa perlu ganti mode manual.
+2. Probe kandidat mencoba varian "Semua Komentar" (`forceAllComments`) dulu,
+   lalu varian asli (mode user) bila FB menolak — hasil tak bergantung pada
+   pilihan sortir di halaman.
+3. DOM fallback di-scope ke `postRoot`: `window.scrollBy` dihapus (scroll
+   hanya kontainer komentar dalam post), klik expand & panen nama tidak lagi
+   menyentuh `document`.
+4. Posisi scroll halaman di-snapshot di awal `runExtract` dan dikembalikan di
+   `finally` — akhir run kembali ke postingan yang sama.
+
+### Validasi
+- `npm run check` Syntax OK · `npm test` 74/74 · `npm run build` OK
+  (dist/ v1.0.35; marker RANKED_UNFILTERED ×5, savedScrollY ×4,
+  `scrapeDomNames(document)` 0, `window.scrollBy(0, 350)` 0).
+
+### Verifikasi lapangan wajib user
+1. Post viral: Proses TANPA mengganti sortir → hasil harus mencakup semua
+   komentar (bukan cuma "Paling Relevan").
+2. Post terbaru di profil: Proses → di akhir run halaman tetap di post yang
+   sama, bukan melayang ke post bawah.
+3. Bandingkan hasil Proses dengan mode "Semua Komentar" manual (harus sama).
+
+## 18. Audit Hasil v1.0.35 — Kontaminasi Lintas Post di Hook Jaringan (v1.0.36, 2026-08-11)
+
+Audit ulang atas perbaikan v1.0.35 (seksi 17) — memeriksa ulang seluruh jalur
+pengambilan nama di inject-fb.js untuk sisa celah kontaminasi lintas post.
+
+### Jalur pengambilan nama & status guard (dibaca langsung)
+| Jalur | v1.0.35 | v1.0.36 |
+|---|---|---|
+| `scrapeDomNames` (DOM) | di-scope ke postRoot ✓ | ✓ |
+| Klik expand "lihat komentar lain" | postRoot only ✓ | ✓ |
+| Scroll halaman (`window.scrollBy`) | dihapus ✓ | ✓ |
+| Restore posisi scroll akhir run | ✓ | ✓ |
+| **Hook fetch/XHR (respons GraphQL halaman)** | **❌ tanpa filter — semua respons diproses** | ✓ di-guard `isTargetCommentResponse` |
+
+### Temuan & perbaikan v1.0.36
+- **Temuan**: hook `window.fetch`/XHR (always-on, document_start) memanggil
+  `extractNamesFromText(t)` untuk SETIAP respons GraphQL saat `running` — di
+  feed, komentar postingan lain yang dimuat (auto-load/scroll manual) bocor
+  ke hasil. `pushGqlBuffer` ikut terkontaminasi (drain saat run).
+- **Perbaikan**: `feedbackIdsFromReqBody(body)` membaca `feedbackID`/
+  `feedback_id` dari variabel request; `isTargetCommentResponse(reqIds)`
+  hanya memproses respons yang membawa id postingan target — id dari URL
+  permalink (`feedbackIdsFromUrl`) + `activeFeedbackId` (dikunci saat probe
+  memilih template di `paginateGraphql`, di-reset di awal `runExtract`).
+  Request tanpa feedback id (balasan pakai `id` komentar, bentuk tak dikenal)
+  tetap diproses → tanpa regresi ekstraksi balasan.
+- Template capture tidak berubah: `captureGraphqlRequest` tetap menyimpan
+  semua template comment-ish, dan `orderedCandidates` (filter feedbackId
+  URL) + probe memilih yang benar untuk replay. Nama dari replay engine
+  diekstrak langsung (bukan lewat hook) — sudah target by construction.
+
+### Validasi
+- `npm run check` Syntax OK · `npm test` 74/74 · `npm run build` OK
+  (dist/ v1.0.36; `isTargetCommentResponse`/`activeFeedbackId` ×7, semua
+  `extractNamesFromText` di hook ter-guard).
+
+### Catatan jujur (bukan bug, risiko sisa yang didokumentasikan)
+- Probe memvalidasi bentuk (`page_info`) bukan feedback id respons — bila
+  SEMUA kandidat URL-matched gagal dan template post lain lolos probe,
+  replay bisa menyasar post lain (kasus langka). Follow-up P2: verifikasi
+  feedback id di respons probe (`findFeedbackIds`). Tidak diubah sekarang
+  agar tidak memutus pagination permalink yang sudah jalan.
+- Di feed tanpa URL permalink, sebelum probe memilih template, respons
+  halaman tidak diekstrak (tunggu kunci target) — template tetap ter-capture
+  dan replay mengekstrak setelah probe.

@@ -22,9 +22,11 @@ import {
 const $ = (id) => document.getElementById(id);
 
 const statusEl = $("status");
+const statIconEl = $("statIcon");
 const hintEl = $("hint");
 const apiBadgeEl = $("apiBadge");
 const countEl = $("count");
+const countWordEl = $("countWord");
 const previewEl = $("preview");
 const btnProcess = $("btnProcess");
 const btnStop = $("btnStop");
@@ -39,6 +41,8 @@ const btnSort = $("btnSort");
 const searchInput = $("searchInput");
 const includeRepliesEl = $("includeReplies");
 const platformBadge = $("platformBadge");
+const platformIcon = $("platformIcon");
+const platformName = $("platformName");
 const btnOptions = $("btnOptions");
 
 const headerTitle = $("headerTitle");
@@ -67,9 +71,17 @@ function setPlatformUI(platform) {
   const platformChanged = platform !== currentPlatform;
   currentPlatform = platform;
   document.body.dataset.platform = platform || "";
+  platformIcon.textContent =
+    platform === "facebook"
+      ? "facebook"
+      : platform === "tiktok"
+        ? "music_note"
+        : platform === "instagram"
+          ? "instagram"
+          : "public";
 
   if (platform === "facebook") {
-    platformBadge.textContent = "📘 Facebook";
+    platformName.textContent = "Facebook";
     headerTitle.textContent = "ReSo Ekstention";
     headerSub.textContent = "FB — Nama komentator → copy ke Excel";
     searchInput.placeholder = "Cari nama…";
@@ -86,7 +98,7 @@ function setPlatformUI(platform) {
     }
     if (currentPlatform) btnProcess.disabled = false;
   } else if (platform === "tiktok") {
-    platformBadge.textContent = "🎵 TikTok";
+    platformName.textContent = "TikTok";
     headerTitle.textContent = "ReSo Ekstention";
     headerSub.textContent = "TikTok — Nickname komentator → copy ke Excel";
     searchInput.placeholder = "Cari nama…";
@@ -102,7 +114,7 @@ function setPlatformUI(platform) {
     }
     if (currentPlatform) btnProcess.disabled = false;
   } else if (platform === "instagram") {
-    platformBadge.textContent = "📸 Instagram";
+    platformName.textContent = "Instagram";
     headerTitle.textContent = "ReSo Ekstention";
     headerSub.textContent = "IG — Username komentator → copy ke Excel";
     searchInput.placeholder = "Cari username…";
@@ -118,7 +130,7 @@ function setPlatformUI(platform) {
     }
     if (currentPlatform) btnProcess.disabled = false;
   } else {
-    platformBadge.textContent = "⚠️ Platform tidak didukung";
+    platformName.textContent = "Tidak didukung";
     headerTitle.textContent = "ReSo Ekstention";
     headerSub.textContent = "Buka tab Facebook / TikTok / Instagram untuk mulai";
     stepsFb.hidden = true;
@@ -140,20 +152,23 @@ function render(state, platform) {
         ? "Buka tab Facebook, TikTok, atau Instagram untuk mulai."
         : "Memuat…";
     hintEl.textContent = "";
-    countEl.textContent = `0 ${wordFor(p)}`;
+    countEl.textContent = "0";
+    countWordEl.textContent = wordFor(p);
     previewEl.hidden = true;
     previewEl.textContent = "";
     btnStop.hidden = true;
     btnCopy.disabled = true;
-    btnCopy.textContent = `Copy ${wordFor(p)}`;
+    btnCopy.setAttribute("aria-label", `Salin ${wordFor(p)}`);
     if (btnCsv) btnCsv.disabled = true;
     if (btnMerge) btnMerge.disabled = true;
     if (apiBadgeEl) apiBadgeEl.hidden = true;
     document.body.dataset.status = "idle";
+    setStatusIcon("idle");
     return;
   }
 
   statusEl.textContent = state.message || "";
+  setStatusIcon(state.status || "idle");
 
   // Hint — sembunyikan detail teknis (template/aweme id/media id) saat run
   // selesai; baris status sudah menjelaskan hasilnya.
@@ -164,14 +179,14 @@ function render(state, platform) {
     hintEl.textContent = "";
   } else if (isTt) {
     hintEl.textContent = state.videoHint
-      ? `Video: ${state.videoHint}`
+      ? `Target: ${state.videoHint}`
       : "Target: tab TikTok aktif";
     // API badge
     if (apiBadgeEl) {
       apiBadgeEl.hidden = false;
-      apiBadgeEl.textContent = state.hasTemplate
-        ? "API komentar: siap"
-        : "API komentar: belum — buka panel komentar";
+      apiBadgeEl.innerHTML = state.hasTemplate
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       apiBadgeEl.classList.toggle("ok", !!state.hasTemplate);
     }
   } else if (isIg) {
@@ -181,9 +196,9 @@ function render(state, platform) {
     // API badge (same replay pattern as TikTok)
     if (apiBadgeEl) {
       apiBadgeEl.hidden = false;
-      apiBadgeEl.textContent = state.hasTemplate
-        ? "API komentar: siap"
-        : "API komentar: belum — buka komentar & pastikan login";
+      apiBadgeEl.innerHTML = state.hasTemplate
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       apiBadgeEl.classList.toggle("ok", !!state.hasTemplate);
     }
   } else {
@@ -195,9 +210,9 @@ function render(state, platform) {
     if (apiBadgeEl) {
       const fbReady = isFacebookPostPage(currentTabUrl);
       apiBadgeEl.hidden = false;
-      apiBadgeEl.textContent = fbReady
-        ? "API komentar: siap"
-        : "API komentar: belum — buka permalink post";
+      apiBadgeEl.innerHTML = fbReady
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       apiBadgeEl.classList.toggle("ok", fbReady);
     }
   }
@@ -207,9 +222,8 @@ function render(state, platform) {
   const names = state.names || [];
   const vis = visibleNames(names);
   const n = state.count ?? names.length;
-  countEl.textContent = query.trim()
-    ? `${vis.length} dari ${n} ${wordFor(p)}`
-    : `${n} ${wordFor(p)}`;
+  countEl.textContent = String(query.trim() ? vis.length : n);
+  countWordEl.textContent = `${query.trim() ? `dari ${n} ` : ""}${wordFor(p)}`;
 
   // Include replies — only sync from state if user hasn't toggled locally
   if (!repliesDirty && typeof state.includeReplies === "boolean") {
@@ -233,12 +247,20 @@ function render(state, platform) {
   if (currentPlatform) {
     btnProcess.disabled = running;
   }
-  btnProcess.textContent = running ? "Memproses…" : "Proses";
+  const processIc = btnProcess.querySelector(".rs-ic");
+  if (processIc) processIc.textContent = running ? "progress_activity" : "play_arrow";
+  btnProcess.setAttribute(
+    "aria-label",
+    running ? "Memproses…" : "Mulai ambil nama"
+  );
   btnStop.hidden = !running;
   btnCopy.disabled = vis.length === 0;
-  btnCopy.textContent = vis.length
-    ? `Copy ${wordFor(p)} (${shownTotal})`
-    : `Copy ${wordFor(p)}`;
+  btnCopy.setAttribute(
+    "aria-label",
+    vis.length
+      ? `Salin ${wordFor(p)} (${shownTotal})`
+      : `Salin ${wordFor(p)}`
+  );
   if (btnCsv) btnCsv.disabled = vis.length === 0;
   if (btnMerge) btnMerge.disabled = false;
 
@@ -388,7 +410,10 @@ btnCsv.addEventListener("click", async () => {
 
 btnSort.addEventListener("click", () => {
   sortAz = !sortAz;
-  btnSort.textContent = sortAz ? "Urutkan asli" : "Urutkan A-Z";
+  btnSort.setAttribute("aria-pressed", String(sortAz));
+  btnSort.title = sortAz ? "Urutkan asli" : "Urutkan A–Z";
+  btnSort.setAttribute("aria-label", sortAz ? "Urutkan asli" : "Urutkan A–Z");
+  btnSort.classList.toggle("active", sortAz);
   refresh();
 });
 
@@ -485,6 +510,20 @@ chrome.storage.session.onChanged.addListener((changes) => {
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && changes[PREFS_KEY]) applyTheme();
 });
+
+/** Status icon (Material) driven by body data-status — popup flat minimal. */
+function setStatusIcon(status) {
+  if (!statIconEl) return;
+  const icons = {
+    idle: "radio_button_unchecked",
+    running: "autorenew",
+    done: "task_alt",
+    partial: "warning",
+    stopped: "stop_circle",
+    error: "error",
+  };
+  statIconEl.textContent = icons[status] || icons.idle;
+}
 
 // Init
 init();

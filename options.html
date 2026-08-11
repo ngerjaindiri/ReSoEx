@@ -4,6 +4,12 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ReSo Ekstention — Pengaturan</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block"
+    />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body>
@@ -27,7 +33,7 @@
         </p>
 
         <label class="row">
-          <span class="row-label">📘 Facebook</span>
+          <span class="row-label"><span class="rs-ic plat-fb" aria-hidden="true">facebook</span>Facebook</span>
           <span class="switch">
             <input id="optFb" type="checkbox" />
             <span class="slider" aria-hidden="true"></span>
@@ -35,7 +41,7 @@
         </label>
 
         <label class="row">
-          <span class="row-label">🎵 TikTok</span>
+          <span class="row-label"><span class="rs-ic plat-tt" aria-hidden="true">music_note</span>TikTok</span>
           <span class="switch">
             <input id="optTt" type="checkbox" />
             <span class="slider" aria-hidden="true"></span>
@@ -43,7 +49,7 @@
         </label>
 
         <label class="row">
-          <span class="row-label">📸 Instagram</span>
+          <span class="row-label"><span class="rs-ic plat-ig" aria-hidden="true">instagram</span>Instagram</span>
           <span class="switch">
             <input id="optIg" type="checkbox" />
             <span class="slider" aria-hidden="true"></span>
@@ -61,21 +67,23 @@
         <div class="segmented" role="radiogroup" aria-label="Pilih tema">
           <label class="seg">
             <input type="radio" name="theme" value="system" />
-            <span>🖥️ Sistem</span>
+            <span class="rs-ic" aria-hidden="true">monitor</span>Sistem
           </label>
           <label class="seg">
             <input type="radio" name="theme" value="light" />
-            <span>☀️ Terang</span>
+            <span class="rs-ic" aria-hidden="true">light_mode</span>Terang
           </label>
           <label class="seg">
             <input type="radio" name="theme" value="dark" />
-            <span>🌙 Gelap</span>
+            <span class="rs-ic" aria-hidden="true">dark_mode</span>Gelap
           </label>
         </div>
       </section>
 
       <footer class="foot">
-        <button id="btnRestore" class="btn ghost" type="button">Pulihkan default</button>
+        <button id="btnRestore" class="btn ghost" type="button">
+          <span class="rs-ic" aria-hidden="true">restore</span>Pulihkan default
+        </button>
         <span id="toast" class="toast" role="status" aria-live="polite"></span>
       </footer>
     </main>

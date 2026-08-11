@@ -11,7 +11,7 @@
   let ui = null;
   let status = "idle";
   let names = [];
-  let message = "Buka 1 postingan, lalu klik Proses.";
+  let message = "Buka 1 postingan Facebook, lalu klik Proses.";
   let postHint = "";
   let includeReplies = true;
   let engineReady = false;
@@ -19,8 +19,13 @@
   let stopFinalizeTimer = null;
   /** @type {((v: boolean) => void) | null} */
   let readyWaiter = null;
-  /** true saat user sengaja menutup panel (min) — jangan dipaksa buka lagi */
-  let userCollapsed = false;
+
+  // Cooldown antar-run — jeda minimum setelah run apa pun, lebih lama lagi
+  // setelah rate limit (pola IG, konsisten lintas platform).
+  const COOLDOWN_MS = 15_000;
+  const COOLDOWN_RATE_LIMIT_MS = 60_000;
+  let lastRunEndAt = 0;
+  let lastRateLimitAt = 0;
   /** Filter pencarian & urutan daftar nama di panel (parity popup). */
   let query = "";
   let sortAz = false;
@@ -373,6 +378,59 @@
     // A newer start/stop superseded this one
     if (gen !== startGen) return;
 
+    // Cooldown antar-run — run beruntun adalah pemicu rate-limit (pola IG
+    // v1.0.15, konsisten lintas platform): jeda minimum setelah run apa pun,
+    // lebih lama lagi setelah rate limit.
+    const nowC = Date.now();
+    const sinceEnd = lastRunEndAt ? nowC - lastRunEndAt : Infinity;
+    const sinceRl = lastRateLimitAt ? nowC - lastRateLimitAt : Infinity;
+    const coolMs =
+      sinceRl < COOLDOWN_RATE_LIMIT_MS
+        ? COOLDOWN_RATE_LIMIT_MS - sinceRl
+        : Math.max(0, COOLDOWN_MS - sinceEnd);
+    if (coolMs > 0) {
+      const waitSec = Math.ceil(coolMs / 1000);
+      setLocalState({
+        status: "idle",
+        message: `Tunggu ${waitSec} dtk sebelum Proses lagi (cooldown anti rate-limit).`,
+      });
+      setTimeout(() => {
+        if (status !== "running") {
+          setLocalState({
+            message: "Cooldown selesai — klik Proses untuk mulai.",
+          });
+        }
+      }, coolMs);
+      return;
+    }
+
+    // Pre-check login (pola IG/TT): replay GraphQL butuh sesi Facebook.
+    // Gagal cepat dengan pesan jelas alih-alih run yang sia-sia saat logout.
+    const login = await sendBg("CHECK_FB_LOGIN");
+    if (gen !== startGen) return;
+    if (login && login.loggedIn === false) {
+      const noLoginMsg =
+        "Sesi Facebook tidak aktif — login di facebook.com lalu Proses lagi.";
+      setLocalState({
+        status: "error",
+        names: [],
+        message: noLoginMsg,
+        postHint: "",
+      });
+      await sendBg("SET_STATE", {
+        patch: {
+          status: "error",
+          names: [],
+          count: 0,
+          message: noLoginMsg,
+          stopReason: "no_login",
+          postHint: "",
+          runId: null,
+        },
+      });
+      return;
+    }
+
     currentRunId = opts.runId || makeRunId();
     setLocalState({
       status: "running",
@@ -455,6 +513,7 @@
       if (status !== "running") return;
       if (currentRunId !== stopRunId) return;
       const list = names.slice();
+      lastRunEndAt = Date.now();
       setLocalState({
         status: list.length ? "stopped" : "error",
         message: doneMessage("stopped", list.length, "facebook"),
@@ -479,7 +538,7 @@
     setLocalState({
       status: "idle",
       names: [],
-      message: "Buka 1 postingan, lalu klik Proses.",
+      message: "Buka 1 postingan Facebook, lalu klik Proses.",
       postHint: "",
     });
     await sendBg("RESET");
@@ -546,7 +605,7 @@
       try {
         document.execCommand("copy");
         setLocalState({
-          message: `Tersalin ${names.length} nama. Paste di Excel.`,
+          message: `Tersalin ${vis.length} nama. Paste di Excel.`,
         });
         return true;
       } catch {
@@ -577,41 +636,45 @@
     }
     const root = document.createElement("div");
     root.id = ROOT_ID;
-    // Default visibility: collapsed — otomatis diperluas saat ada hasil
-    // (sama dengan TikTok/Instagram). Buka lewat FAB atau ikon di bar Like.
+    // Default visibility: TERTUTUP selalu (flat minimal) — panel tidak
+    // mengambang menutupi halaman saat scrolling. Buka lewat FAB atau ikon
+    // di bar Like; hasil tetap terlihat di badge FAB.
     root.classList.add("fnk-collapsed");
+    ensureIconFont();
     root.innerHTML = `
       <div class="fnk-panel" role="region" aria-label="FB Nama Komentar">
         <div class="fnk-header">
-          <span class="fnk-logo" aria-hidden="true">N</span>
+          <span class="rs-ic fnk-logo-ic" aria-hidden="true">facebook</span>
           <span class="fnk-title">Nama Komentar</span>
-          <button type="button" class="fnk-min" title="Tutup" aria-label="Tutup panel" data-fnk="min">–</button>
+          <button type="button" class="fnk-min" title="Tutup" aria-label="Tutup panel" data-fnk="min"><span class="rs-ic" aria-hidden="true">close</span></button>
         </div>
         <div class="fnk-body">
           <div class="fnk-status" data-fnk="status" aria-live="polite"></div>
           <div class="fnk-hint" data-fnk="hint"></div>
-          <div class="fnk-count" data-fnk="count"></div>
+          <div class="fnk-count" data-fnk="count">0 nama</div>
           <div class="fnk-badge" data-fnk="badge"></div>
           <label class="fnk-check">
-            <input type="checkbox" data-fnk="replies" checked />
-            Sertakan balasan (reply)
+            <input type="checkbox" data-fnk="replies" />
+            <span class="rs-ic" aria-hidden="true">forum</span>
+            <span>Balasan</span>
           </label>
           <div class="fnk-tools">
-            <input class="fnk-search" type="search" data-fnk="search" placeholder="Cari nama…" aria-label="Cari nama" />
-            <button type="button" class="fnk-btn fnk-sort" data-fnk="sort" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+            <span class="rs-ic fnk-search-ic" aria-hidden="true">search</span>
+            <input class="fnk-search" type="search" data-fnk="search" placeholder="Cari…" aria-label="Cari nama" />
+            <button type="button" class="fnk-btn fnk-sort" data-fnk="sort" title="Urutkan A–Z" aria-label="Urutkan A–Z" aria-pressed="false"><span class="rs-ic" aria-hidden="true">sort</span></button>
           </div>
           <div class="fnk-list" data-fnk="list" hidden></div>
           <div class="fnk-actions">
-            <button type="button" class="fnk-btn fnk-primary" data-fnk="process" title="Mulai ambil nama">Proses</button>
-            <button type="button" class="fnk-btn" data-fnk="stop" hidden title="Hentikan">Stop</button>
-            <button type="button" class="fnk-btn fnk-success" data-fnk="copy" disabled title="Salin ke clipboard">Copy nama</button>
-            <button type="button" class="fnk-btn fnk-ghost" data-fnk="reset" title="Bersihkan hasil & reset">Reset</button>
-            <button type="button" class="fnk-btn" data-fnk="csv" disabled title="Simpan ke file CSV (siap Excel)">CSV</button>
-            <button type="button" class="fnk-btn fnk-ghost" data-fnk="merge" title="Gabungkan nama unik FB + TikTok + IG lalu salin">Gabung</button>
+            <button type="button" class="fnk-btn fnk-primary" data-fnk="process" title="Mulai ambil nama" aria-label="Mulai ambil nama"><span class="rs-ic" aria-hidden="true">play_arrow</span></button>
+            <button type="button" class="fnk-btn" data-fnk="stop" hidden title="Hentikan" aria-label="Hentikan"><span class="rs-ic" aria-hidden="true">stop</span></button>
+            <button type="button" class="fnk-btn fnk-success" data-fnk="copy" disabled title="Salin ke clipboard" aria-label="Salin nama"><span class="rs-ic" aria-hidden="true">content_copy</span></button>
+            <button type="button" class="fnk-btn" data-fnk="csv" disabled title="Simpan ke CSV (Excel)" aria-label="Simpan CSV"><span class="rs-ic" aria-hidden="true">download</span></button>
+            <button type="button" class="fnk-btn fnk-ghost" data-fnk="reset" title="Bersihkan hasil" aria-label="Bersihkan hasil"><span class="rs-ic" aria-hidden="true">restart_alt</span></button>
+            <button type="button" class="fnk-btn fnk-ghost" data-fnk="merge" title="Gabung FB + TikTok + IG lalu salin" aria-label="Gabung semua platform"><span class="rs-ic" aria-hidden="true">merge_type</span></button>
           </div>
         </div>
       </div>
-      <button type="button" class="fnk-fab" data-fnk="fab" data-count="" title="Nama Komentar" aria-label="Buka panel Nama Komentar">N</button>
+      <button type="button" class="fnk-fab" data-fnk="fab" data-count="" title="Nama Komentar" aria-label="Buka panel Nama Komentar"><span class="rs-ic" aria-hidden="true">forum</span></button>
     `;
     (document.body || document.documentElement).appendChild(root);
     ui = root;
@@ -629,17 +692,17 @@
       if (act === "sort") toggleSort();
       if (act === "min") {
         root.classList.add("fnk-collapsed");
-        userCollapsed = true;
       }
       if (act === "fab") {
         root.classList.remove("fnk-collapsed");
-        userCollapsed = false;
       }
     });
     root.addEventListener("change", (e) => {
       const t = e.target;
       if (t && t.getAttribute?.("data-fnk") === "replies") {
         includeReplies = !!t.checked;
+        // Persist pref seketika (parity popup) — bukan hanya saat run dimulai.
+        sendBg("SET_STATE", { patch: { includeReplies } });
       }
     });
     root.addEventListener("input", (e) => {
@@ -653,13 +716,23 @@
       if (e.key !== "Escape" || !ui) return;
       if (!ui.classList.contains("fnk-collapsed")) {
         ui.classList.add("fnk-collapsed");
-        userCollapsed = true;
       }
     });
 
     ensureActionIcon();
     applySettings();
     return root;
+  }
+
+  /** Load Material Symbols (Google) sekali — dipakai semua ikon panel/FAB. */
+  function ensureIconFont() {
+    if (document.getElementById("rs-ms-font")) return;
+    const link = document.createElement("link");
+    link.id = "rs-ms-font";
+    link.rel = "stylesheet";
+    link.href =
+      "https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block";
+    (document.head || document.documentElement).appendChild(link);
   }
 
   /**
@@ -725,14 +798,13 @@
       markPostFromEl(chip);
       if (ui) {
         ui.classList.remove("fnk-collapsed");
-        userCollapsed = false;
       }
     });
     // Right-click / long alternative: open panel only
     chip.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (ui) userCollapsed = ui.classList.toggle("fnk-collapsed");
+      if (ui) ui.classList.toggle("fnk-collapsed");
     });
     document.documentElement.appendChild(chip);
   }
@@ -830,29 +902,87 @@
     }
   }
 
-  /** FB: engine dapat paginate via GraphQL bila halaman post permalink
-   *  (synthetic template dari feedbackId di URL — mirror shared.isFacebookPostPage). */
-  function fbGraphqlReady() {
-    const href = String(location.href);
-    if (
-      /\/posts\/\d+/.test(href) ||
-      /\/permalink\.php\?story_fbid=\d+/.test(href) ||
-      /\/story\.php\?story_fbid=\d+/.test(href) ||
-      /\/photos\/\d+/.test(href) ||
-      /\/videos\/\d+/.test(href) ||
-      /\/reel\/\d+/.test(href) ||
-      /\/watch\/\d+/.test(href) ||
-      /[?&](?:story_fbid|fbid)=\d+/.test(href)
-    ) {
-      return true;
+  // BEGIN-RESO-FBURLS
+  /**
+   * SINGLE SOURCE OF TRUTH untuk deteksi permalink Facebook — dipakai badge
+   * panel (isFacebookPostPage), synthetic template engine (extractFbFeedbackIds),
+   * dan pre-check. Disalin byte-identik ke inject-fb.js & content-fb.js; dijamin
+   * fixture test FBURLS. Mengembalikan kandidat story/feedback id dari URL;
+   * engine mem-probe tiap kandidat (urutan = prioritas) dan memakai yang benar
+   * menghasilkan page_info — robust terhadap bentuk URL yang id-nya ambigu
+   * (mis. album `set=a.X.Y.Z`, postingan multi-foto `set=pcb.<story>`,
+   * dan `photos/a.<uid>.<fbid>`).
+   */
+  function extractFbFeedbackIds(url) {
+    const out = [];
+    const add = (id) => {
+      if (typeof id !== "string" || !/^[A-Za-z0-9]{8,}$/.test(id)) return;
+      if (!out.includes(id)) out.push(id);
+    };
+    if (!url || typeof url !== "string") return out;
+    const href = url;
+
+    // 1) Bentuk path yang membawa story/feedback id
+    const direct = [
+      /\/posts\/[^/?#]+\/([^/?#]+)/, // posts/<slug>/<id> (gaya baru)
+      /\/posts\/([^/?#]+)/, // posts/<id> (klasik & grup)
+      /\/permalink\.php\?story_fbid=([^&#]+)/,
+      /\/story\.php\?story_fbid=([^&#]+)/,
+      /\/photos\/a\.\d+\.(\d+)/, // photos/a.<uid>.<fbid> (album foto)
+      /\/photos\/(\d+)/, // foto tunggal (id foto — probe memvalidasi)
+      /\/videos\/(\d+)/,
+      /\/reel\/(\d+)/,
+      /\/video\.php\?v=(\d+)/,
+    ];
+    for (const re of direct) {
+      const m = href.match(re);
+      if (m) add(m[1]);
     }
+
+    // 2) Watch (query v=) — bentuk paling umum untuk permalink video
+    const watch = href.match(/\/watch(?:[^?#]*\?|\?)[^#]*\bv=(\d+)/i);
+    if (watch) add(watch[1]);
+
+    // 3) Param umum (story_fbid/fbid/v, termasuk nilai pfbid alfanumerik)
+    //    + set: pcb.<story> = postingan multi-foto (id-nya feedback/story id,
+    //      prioritas tinggi karena `fbid` di URL tersebut id foto, bukan story)
+    //      dan a.<album>.<user>.<story> (komponen terakhir = story id)
     try {
-      const path = new URL(href).pathname.replace(/^\/+|\/+$/g, "");
-      if (/^\d{8,}$/.test(path)) return true;
+      const u = new URL(href);
+      for (const key of ["story_fbid"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      const set = u.searchParams.get("set") || "";
+      const parts = String(set).split(".");
+      if (parts[0] === "pcb" && parts.length >= 2) add(parts[parts.length - 1]);
+      for (const key of ["fbid", "v"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      if (parts[0] === "a" && parts.length >= 4) add(parts[3]);
     } catch {
       /* ignore */
     }
-    return false;
+    return out;
+  }
+
+  /** Kandidat pertama (prioritas tertinggi). */
+  function extractFbFeedbackId(url) {
+    const ids = extractFbFeedbackIds(url);
+    return ids.length ? ids[0] : null;
+  }
+
+  /** Apakah URL adalah halaman post permalink FB yang didukung engine? */
+  function isFacebookPostPage(url) {
+    return extractFbFeedbackIds(url).length > 0;
+  }
+  // END-RESO-FBURLS
+
+  /** FB: engine dapat paginate via GraphQL bila halaman post permalink
+   *  (synthetic template dari feedbackId di URL — via blok FBURLS). */
+  function fbGraphqlReady() {
+    return isFacebookPostPage(String(location.href));
   }
 
   function renderUi() {
@@ -878,7 +1008,7 @@
         ? ""
         : postHint
           ? `Target: ${postHint}`
-          : "Tombol N (pojok kanan) atau ikon di bar Like = buka panel";
+          : "Buka permalink post, buka komentar, lalu Proses.";
     }
     // Count — saat filter aktif tampilkan "X dari N" agar jelas kenapa
     // tombol Copy bisa nonaktif walau ada hasil.
@@ -892,9 +1022,9 @@
     }
     if (badgeEl) {
       const ready = fbGraphqlReady();
-      badgeEl.textContent = ready
-        ? "API komentar: siap"
-        : "API komentar: belum — buka permalink post";
+      badgeEl.innerHTML = ready
+        ? '<span class="rs-ic">check_circle</span>Siap'
+        : '<span class="rs-ic">error</span>Belum';
       badgeEl.classList.toggle("fnk-ok", ready);
       badgeEl.classList.toggle("fnk-warn", !ready);
     }
@@ -903,17 +1033,32 @@
     const running = status === "running";
     if (processBtn) {
       processBtn.disabled = running;
-      processBtn.textContent = running ? "Memproses…" : "Proses";
+      const processIc = processBtn.querySelector(".rs-ic");
+      if (processIc) {
+        processIc.textContent = running ? "progress_activity" : "play_arrow";
+      }
+      processBtn.setAttribute(
+        "aria-label",
+        running ? "Memproses…" : "Mulai ambil nama"
+      );
     }
     if (stopBtn) stopBtn.hidden = !running;
     if (copyBtn) {
       copyBtn.disabled = vis.length === 0;
-      copyBtn.textContent = vis.length
-        ? `Copy nama (${vis.length})`
-        : "Copy nama";
+      copyBtn.setAttribute(
+        "aria-label",
+        vis.length ? `Salin nama (${vis.length})` : "Salin nama"
+      );
     }
     if (csvBtn) csvBtn.disabled = vis.length === 0;
     if (mergeBtn) mergeBtn.disabled = false;
+    const sortBtn = ui.querySelector('[data-fnk="sort"]');
+    if (sortBtn) {
+      sortBtn.setAttribute("aria-pressed", String(sortAz));
+      sortBtn.classList.toggle("fnk-active", sortAz);
+      sortBtn.title = sortAz ? "Urutkan asli" : "Urutkan A–Z";
+      sortBtn.setAttribute("aria-label", sortAz ? "Urutkan asli" : "Urutkan A–Z");
+    }
 
     // Preview daftar — hormati filter & urutan (parity dengan popup).
     const listEl = ui.querySelector('[data-fnk="list"]');
@@ -1002,8 +1147,12 @@
     if (stopReason === "stopped") return "stopped";
     if (stopReason === "timeout") return "partial";
     if (stopReason === "rate_limit") return count ? "partial" : "error";
-    if (stopReason === "no_login") return "error";
-    if (stopReason === "error") return "error";
+    if (
+      stopReason === "error" ||
+      stopReason === "no_template" ||
+      stopReason === "no_login"
+    )
+      return "error";
     if (stopReason === "complete") return count ? "done" : "error";
     if (stopReason === "idle") return count ? "done" : "error";
     return count ? "done" : "error";
@@ -1062,6 +1211,10 @@
       const list = Array.isArray(data.names) ? data.names : [];
       const stopReason =
         typeof data.stopReason === "string" ? data.stopReason : "complete";
+      lastRunEndAt = Date.now();
+      if (stopReason === "rate_limit" || /rate\s*limit|429/i.test(data.postHint || "")) {
+        lastRateLimitAt = Date.now();
+      }
       const st = mapDoneStatus(stopReason, list.length);
       // Pesan akhir via helper tunggal (DONEMSG) — konsisten dengan popup &
       // platform lain. Suffix [graphql]/[dom] dihapus (mode tetap terlihat
@@ -1080,11 +1233,8 @@
         postHint:
           typeof data.postHint === "string" ? data.postHint : postHint,
       });
-      // Default visibility = expanded saat ada hasil (sama dengan TT/IG) —
-      // run dari popup/shortcut ikut menampilkan hasilnya di panel.
-      if (list.length > 0 && !userCollapsed && ui) {
-        ui.classList.remove("fnk-collapsed");
-      }
+      // Default visibility = TETAP TERTUTUP (flat minimal) — hasil terlihat
+      // di badge FAB; panel hanya dibuka oleh user (FAB / ikon bar Like).
       sendBg("NAMES_DONE", {
         names: list,
         stopReason,
@@ -1137,8 +1287,9 @@
 
   function boot() {
     placeUi();
-    // Default visibility: expanded saat ada hasil tersimpan (sama dengan
-    // TikTok/Instagram) — pulihkan hasil lintas reload & buka panel.
+    // Default visibility: TETAP TERTUTUP (flat minimal) — hasil tersimpan
+    // dipulihkan ke state panel, badge FAB menampilkan jumlah, tapi panel
+    // tidak mengambang terbuka di atas halaman.
     sendBg("GET_STATE").then((res) => {
       if (!res?.ok || !res?.state) return;
       const st = res.state;
@@ -1153,10 +1304,6 @@
               : `Hasil tersimpan — ${saved.length} nama. Klik Copy.`,
           postHint: typeof st.postHint === "string" ? st.postHint : "",
         });
-        if (ui) {
-          ui.classList.remove("fnk-collapsed");
-          userCollapsed = false;
-        }
       }
     });
     sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {

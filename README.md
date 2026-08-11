@@ -31,7 +31,9 @@ Tanpa dependensi, tanpa backend, tanpa API key. Semua berjalan di browser Anda.
 
 ### Facebook
 1. Buka **1 postingan** (permalink), bukan home feed.
-2. Pastikan komentar terlihat, lalu buka panel (tombol N di pojok kanan-bawah atau ikon N di bar Like/Comment/Share) dan klik **Proses**. Badge "API komentar: siap" di panel/popup muncul saat berada di halaman post permalink.
+2. Pastikan komentar terlihat, lalu buka panel (FAB ikon di pojok kanan-bawah atau ikon di bar Like/Comment/Share) dan klik **Proses**. Badge API (ikon ✓ Siap / ! Belum) di panel/popup muncul saat berada di halaman post permalink.
+
+> 💡 **Widget panel default tertutup** — FAB kecil di pojok kanan-bawah tidak menutupi halaman saat scrolling; jumlah hasil terlihat di badge FAB. Panel hanya terbuka saat kamu klik FAB.
 3. Tunggu hingga selesai / partial, lalu **Copy nama**.
 4. Paste di Excel — 1 nama per baris.
 
@@ -97,7 +99,8 @@ npm run build   # rakit bundle loadable ke dist/
 > Catatan: `npm install` tidak diperlukan — proyek tanpa dependensi runtime maupun dev.
 > Logika yang dibagi antar-world dipusatkan di `shared.js` dalam blok marker
 > `BEGIN/END-RESO-*`: normalisasi nama (`NORMALIZE`), pesan akhir run (`DONEMSG`),
-> parsing payload komentar (`PARSERS`), dan perkakas UI daftar (`PANELTOOLS`).
+> parsing payload komentar (`PARSERS`), perkakas UI daftar (`PANELTOOLS`), dan
+> deteksi permalink Facebook (`FBURLS`).
 > **Fixture test** (`tests/normalization-fixture.test.mjs`) memastikan semua salinan di
 > engine (MAIN world) dan content scripts tetap byte-identik — melanggar aturan ini
 > membuat `npm test` gagal.
@@ -107,6 +110,12 @@ npm run build   # rakit bundle loadable ke dist/
 > Fitur panel (search, Urutkan A–Z, CSV, Gabung) setara popup; Gabung lintas
 > platform dijalankan di background (`MERGE_ALL`) karena content script hanya
 > membawa normalizer platform-nya sendiri.
+>
+> 🎨 **Desain flat minimal (v1.0.29)** — ikon Material Symbols (Google) di popup,
+> options, dan panel FB/TikTok/IG; tombol aksi ikon-only (tooltip `title`),
+> indikator status & badge API ikon + kata pendek; header panel tanpa gradien.
+> **Widget panel default tertutup**: FAB kecil yang tidak menutupi halaman saat
+> scrolling — hasil terlihat di badge jumlah FAB, panel dibuka via klik FAB.
 
 ## Paket untuk Chrome Web Store
 

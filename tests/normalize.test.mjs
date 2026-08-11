@@ -16,6 +16,7 @@ import {
   isInstagramUrl,
   extractAwemeId,
   extractInstagramShortcode,
+  extractFbFeedbackIds,
   isFacebookPostPage,
   normalizeInstagramUsername,
   sanitizeTikTokTemplateUrl,
@@ -304,26 +305,80 @@ test("IG: merge dedupes case-insensitively (lowercase canonical)", () => {
 });
 
 test("isFacebookPostPage: permalink post shapes (synthetic GraphQL ready)", () => {
-  assert.equal(isFacebookPostPage("https://www.facebook.com/posts/123456789"), true);
+  // Bentuk lama (teks/foto/video/reel)
+  assert.equal(isFacebookPostPage("https://www.facebook.com/posts/10153322400567519"), true);
   assert.equal(
-    isFacebookPostPage("https://www.facebook.com/permalink.php?story_fbid=123&id=456"),
+    isFacebookPostPage("https://www.facebook.com/permalink.php?story_fbid=10153322400567519&id=14038332518"),
     true
   );
   assert.equal(
-    isFacebookPostPage("https://www.facebook.com/story.php?story_fbid=123"),
+    isFacebookPostPage("https://www.facebook.com/story.php?story_fbid=10153322400567519"),
     true
   );
-  assert.equal(isFacebookPostPage("https://www.facebook.com/photos/123456789"), true);
-  assert.equal(isFacebookPostPage("https://www.facebook.com/videos/123456789"), true);
-  assert.equal(isFacebookPostPage("https://www.facebook.com/reel/123456789"), true);
-  assert.equal(isFacebookPostPage("https://www.facebook.com/watch/123456789"), true);
-  assert.equal(isFacebookPostPage("https://www.facebook.com/123456789"), true);
-  assert.equal(isFacebookPostPage("https://m.facebook.com/story.php?story_fbid=123"), true);
+  assert.equal(isFacebookPostPage("https://www.facebook.com/photos/123456789012345"), true);
+  assert.equal(isFacebookPostPage("https://www.facebook.com/videos/10151234567890123"), true);
+  assert.equal(isFacebookPostPage("https://www.facebook.com/reel/1076159001615150"), true);
+  assert.equal(isFacebookPostPage("https://m.facebook.com/story.php?story_fbid=10153322400567519"), true);
+  // Bentuk modern yang sebelumnya MISS (v1.0.28): slug posts, watch?v=, album
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/LaraFabianTheNetherlands/posts/2-photos-source-gala-france1/960401149426609/"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/watch?v=3762250110740268"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/watch/?v=1467518380953415"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/watch/live/?ref=watch_permalink&v=10151234567890123"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/video.php?v=10151234567890123"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/media/set/?set=a.2286037437005.2137559.1430993860"),
+    true
+  );
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/metalwavewebzine/photos/a.10223953348016180.1829884567"),
+    true
+  );
+  // Bukan permalink post: profil, feed, album tanpa story id, null
+  assert.equal(isFacebookPostPage("https://www.facebook.com/100000123456789"), false);
+  assert.equal(
+    isFacebookPostPage("https://www.facebook.com/media/set/?set=a.1293535879446466&type=3"),
+    false
+  );
   assert.equal(isFacebookPostPage("https://www.facebook.com/"), false);
   assert.equal(isFacebookPostPage("https://www.facebook.com/home"), false);
   assert.equal(isFacebookPostPage("https://www.facebook.com/groups/x"), false);
   assert.equal(isFacebookPostPage(null), false);
   assert.equal(isFacebookPostPage(""), false);
+});
+
+test("extractFbFeedbackIds: prioritas & dedupe kandidat id permalink", () => {
+  const ids = extractFbFeedbackIds(
+    "https://www.facebook.com/photo.php?fbid=123456789012345&set=a.757108353089224.1812885352.1020472719478&type=3"
+  );
+  assert.deepEqual(ids, ["123456789012345", "1020472719478"]);
+  // Postingan multi-foto (set=pcb.): story id menang atas fbid (id foto)
+  assert.deepEqual(
+    extractFbFeedbackIds(
+      "https://www.facebook.com/photo?fbid=1483436860484357&set=pcb.1483436933817683"
+    ),
+    ["1483436933817683", "1483436860484357"]
+  );
+  // Dedupe: watch?v= muncul sekali walau dari dua sumber
+  assert.deepEqual(
+    extractFbFeedbackIds("https://www.facebook.com/watch/?v=1467518380953415"),
+    ["1467518380953415"]
+  );
+  assert.deepEqual(extractFbFeedbackIds("https://www.facebook.com/"), []);
 });
 
 test("extractInstagramShortcode: post/reel/share shapes", () => {

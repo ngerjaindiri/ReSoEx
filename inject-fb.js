@@ -36,6 +36,12 @@
   let lastNewAt = Date.now();
   let includeReplies = true;
   let currentRunId = null;
+  /**
+   * Feedback id postingan yang sedang di-paginate (di-set saat probe memilih
+   * template). Dipakai memfilter nama dari respons GraphQL halaman (hook
+   * fetch/XHR) agar komentar postingan LAIN tidak bocor ke hasil.
+   */
+  let activeFeedbackId = null;
   /** Total GraphQL requests this run (budget guard — protect the user's account) */
   let requestBudget = 0;
   const REQUEST_BUDGET = 350;
@@ -228,6 +234,83 @@
     return out;
   }
   // END-RESO-PARSERS
+
+  // BEGIN-RESO-FBURLS
+  /**
+   * SINGLE SOURCE OF TRUTH untuk deteksi permalink Facebook — dipakai badge
+   * panel (isFacebookPostPage), synthetic template engine (extractFbFeedbackIds),
+   * dan pre-check. Disalin byte-identik ke inject-fb.js & content-fb.js; dijamin
+   * fixture test FBURLS. Mengembalikan kandidat story/feedback id dari URL;
+   * engine mem-probe tiap kandidat (urutan = prioritas) dan memakai yang benar
+   * menghasilkan page_info — robust terhadap bentuk URL yang id-nya ambigu
+   * (mis. album `set=a.X.Y.Z`, postingan multi-foto `set=pcb.<story>`,
+   * dan `photos/a.<uid>.<fbid>`).
+   */
+  function extractFbFeedbackIds(url) {
+    const out = [];
+    const add = (id) => {
+      if (typeof id !== "string" || !/^[A-Za-z0-9]{8,}$/.test(id)) return;
+      if (!out.includes(id)) out.push(id);
+    };
+    if (!url || typeof url !== "string") return out;
+    const href = url;
+
+    // 1) Bentuk path yang membawa story/feedback id
+    const direct = [
+      /\/posts\/[^/?#]+\/([^/?#]+)/, // posts/<slug>/<id> (gaya baru)
+      /\/posts\/([^/?#]+)/, // posts/<id> (klasik & grup)
+      /\/permalink\.php\?story_fbid=([^&#]+)/,
+      /\/story\.php\?story_fbid=([^&#]+)/,
+      /\/photos\/a\.\d+\.(\d+)/, // photos/a.<uid>.<fbid> (album foto)
+      /\/photos\/(\d+)/, // foto tunggal (id foto — probe memvalidasi)
+      /\/videos\/(\d+)/,
+      /\/reel\/(\d+)/,
+      /\/video\.php\?v=(\d+)/,
+    ];
+    for (const re of direct) {
+      const m = href.match(re);
+      if (m) add(m[1]);
+    }
+
+    // 2) Watch (query v=) — bentuk paling umum untuk permalink video
+    const watch = href.match(/\/watch(?:[^?#]*\?|\?)[^#]*\bv=(\d+)/i);
+    if (watch) add(watch[1]);
+
+    // 3) Param umum (story_fbid/fbid/v, termasuk nilai pfbid alfanumerik)
+    //    + set: pcb.<story> = postingan multi-foto (id-nya feedback/story id,
+    //      prioritas tinggi karena `fbid` di URL tersebut id foto, bukan story)
+    //      dan a.<album>.<user>.<story> (komponen terakhir = story id)
+    try {
+      const u = new URL(href);
+      for (const key of ["story_fbid"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      const set = u.searchParams.get("set") || "";
+      const parts = String(set).split(".");
+      if (parts[0] === "pcb" && parts.length >= 2) add(parts[parts.length - 1]);
+      for (const key of ["fbid", "v"]) {
+        const val = u.searchParams.get(key);
+        if (val) add(val);
+      }
+      if (parts[0] === "a" && parts.length >= 4) add(parts[3]);
+    } catch {
+      /* ignore */
+    }
+    return out;
+  }
+
+  /** Kandidat pertama (prioritas tertinggi). */
+  function extractFbFeedbackId(url) {
+    const ids = extractFbFeedbackIds(url);
+    return ids.length ? ids[0] : null;
+  }
+
+  /** Apakah URL adalah halaman post permalink FB yang didukung engine? */
+  function isFacebookPostPage(url) {
+    return extractFbFeedbackIds(url).length > 0;
+  }
+  // END-RESO-FBURLS
 
   function addName(raw) {
     const name = normalizeCommentName(raw);
@@ -505,6 +588,44 @@
     if (gqlBuffer.length > GQL_BUFFER_MAX) gqlBuffer.shift();
   }
 
+  /**
+   * Feedback id dari body request GraphQL (variabel `feedbackID`/`feedback_id`
+   * saja — jangan `id`, karena itu bisa id komentar untuk query balasan).
+   * Kosong = request tak bisa diklasifikasikan (balasan, bentuk tak dikenal).
+   */
+  function feedbackIdsFromReqBody(body) {
+    if (body == null) return [];
+    let vars = null;
+    try {
+      const params = parseBodyToParams(body);
+      vars =
+        typeof params.variables === "string"
+          ? JSON.parse(params.variables)
+          : params.variables;
+    } catch {
+      vars = null;
+    }
+    if (!vars || typeof vars !== "object") return [];
+    const out = new Set();
+    for (const k of ["feedbackID", "feedback_id"]) {
+      const v = vars[k];
+      if (typeof v === "string" && v) out.add(v);
+    }
+    return [...out];
+  }
+
+  /**
+   * Apakah respons GraphQL dari request `reqIds` boleh diekstrak namanya?
+   * Rule: id URL (permalink) + id postingan yang sedang di-paginate. Request
+   * tanpa feedback id (balasan, bentuk tak dikenal) tetap diproses.
+   */
+  function isTargetCommentResponse(reqIds) {
+    if (!reqIds || !reqIds.length) return true;
+    const allowed = new Set(feedbackIdsFromUrl());
+    if (activeFeedbackId) allowed.add(activeFeedbackId);
+    return reqIds.some((id) => allowed.has(id));
+  }
+
   function drainGqlBuffer() {
     let n = 0;
     const items = gqlBuffer.splice(0);
@@ -533,12 +654,16 @@
         /* ignore */
       }
       const res = await origFetch.apply(this, args);
+      const reqIds = feedbackIdsFromReqBody(args[1]?.body);
       try {
         if (isGraphqlUrl(url)) {
           res
             .clone()
             .text()
             .then((t) => {
+              // Anti kontaminasi lintas post: hanya proses respons yang request-
+              // nya membawa feedback id postingan target (atau tak terklasifikasi).
+              if (!isTargetCommentResponse(reqIds)) return;
               pushGqlBuffer(t);
               if (running) extractNamesFromText(t);
             })
@@ -571,6 +696,12 @@
         try {
           if (!isGraphqlUrl(this.__fnk_url)) return;
           if (typeof this.responseText === "string") {
+            if (
+              !isTargetCommentResponse(
+                feedbackIdsFromReqBody(this.__fnk_body)
+              )
+            )
+              return;
             pushGqlBuffer(this.responseText);
             if (running) extractNamesFromText(this.responseText);
           }
@@ -865,6 +996,18 @@
       /* ignore */
     }
 
+    // Feedback id salah / post tidak publik / GraphQL error → berhenti dini
+    // (probe kandidat berikutnya, bukan diam-diam jatuh ke "idle").
+    if (json && Array.isArray(json.errors) && json.errors.length) {
+      const first = json.errors[0] || {};
+      const msg = typeof first.message === "string" ? first.message : "";
+      const e = new Error(
+        `GraphQL: ${msg.slice(0, 120) || "feedback tidak ditemukan"}`
+      );
+      e.kind = "graphql_error";
+      throw e;
+    }
+
     const page = json ? findPageInfo(json) : null;
     // also harvest reply expansion ids for later
     const replyIds = [];
@@ -960,61 +1103,82 @@
     );
   }
 
-  /** Ordered candidates for top-level pagination: shaped → last top-level → newest. */
+  /** Apakah variabel template membawa salah satu feedback id dari URL? */
+  function matchesFeedback(t, ids) {
+    if (!t || !ids || !ids.length) return false;
+    let v = t.variables;
+    if (typeof v === "string") {
+      try {
+        v = JSON.parse(v);
+      } catch {
+        v = null;
+      }
+    }
+    const flat = JSON.stringify(v || {});
+    return ids.some((id) => {
+      if (flat.includes(`"feedbackID":"${id}"`)) return true;
+      if (flat.includes(`"feedback_id":"${id}"`)) return true;
+      if (flat.includes(`"id":"${id}"`)) return true;
+      return false;
+    });
+  }
+
+  /** Ordered candidates: URL-matched → shaped → last top-level → newest. */
   function orderedCandidates() {
     const nonReply = [...gqlTemplates.values()]
       .filter((t) => t.friendlyName && !/reply|depth1|replies/i.test(t.friendlyName))
       .sort((a, b) => b.capturedAt - a.capturedAt);
     if (!nonReply.length) return [];
+    const ids = feedbackIdsFromUrl();
     const out = [];
     const push = (t) => {
       if (t && !out.includes(t)) out.push(t);
     };
+    // 1) Template yang id feedback-nya cocok dengan URL (anti salah post —
+    //    setara mediaId filter IG v1.0.15)
+    if (ids.length) {
+      for (const t of nonReply) {
+        if (isPaginationLike(t) && matchesFeedback(t, ids)) push(t);
+      }
+    }
+    // 2) Template pagination-like terbaru
     for (const t of nonReply) if (isPaginationLike(t)) push(t);
+    // 3) Top-level terakhir yang ter-capture
     if (lastTopLevelKey && gqlTemplates.has(lastTopLevelKey)) {
       push(gqlTemplates.get(lastTopLevelKey));
     }
+    // 4) Sisanya (fallback)
     for (const t of nonReply) push(t);
     return out;
   }
 
+  /** Id feedback pertama dari URL permalink (via blok FBURLS). */
   function feedbackIdFromUrl() {
-    try {
-      const href = String(location.href);
-      const patterns = [
-        /\/posts\/(\d+)/,
-        /\/permalink\.php\?story_fbid=(\d+)/,
-        /\/story\.php\?story_fbid=(\d+)/,
-        /\/photos\/(\d+)/,
-        /\/videos\/(\d+)/,
-        /\/reel\/(\d+)/,
-        /\/watch\/(\d+)/,
-        /^\/(\d{8,})(?:\/|\?|$)/,
-      ];
-      for (const re of patterns) {
-        const m = href.match(re);
-        if (m && m[1]) return m[1];
-      }
-      const u = new URL(href);
-      const sf = u.searchParams.get("story_fbid") || u.searchParams.get("fbid");
-      if (sf && /^\d+$/.test(sf)) return sf;
-    } catch {
-      /* ignore */
-    }
-    return null;
+    return extractFbFeedbackId(String(location.href));
+  }
+
+  /** Semua kandidat id feedback dari URL, urut prioritas (via blok FBURLS). */
+  function feedbackIdsFromUrl() {
+    return extractFbFeedbackIds(String(location.href));
   }
 
   /**
-   * If no GraphQL template was ever captured, build the comments pagination
-   * query directly from the post id in the URL (like standalone scrapers do),
-   * so the user does not have to open/scroll the comment list first.
+   * Build the comments pagination query directly from candidate feedback ids
+   * in the URL (like standalone scrapers do), so the user does not have to
+   * open/scroll the comment list first. Urutan kandidat = prioritas probe;
+   * probe memvalidasi id mana yang benar menghasilkan page_info.
    */
-  function buildSyntheticPaginationTemplate() {
-    const feedbackId = feedbackIdFromUrl();
-    if (!feedbackId) return null;
-    return {
+  function buildSyntheticPaginationTemplates() {
+    const ids = feedbackIdsFromUrl();
+    if (!ids.length) return [];
+    const base = {
       url: "https://www.facebook.com/api/graphql/",
       params: {},
+      friendlyName: "CometUFICommentsProviderPaginationQuery",
+      capturedAt: Date.now(),
+    };
+    return ids.slice(0, 3).map((feedbackID) => ({
+      ...base,
       variables: {
         count: 20,
         cursor: null,
@@ -1024,13 +1188,33 @@
         scale: 1,
         isFirstLoad: true,
         previewComments: false,
-        feedbackID: feedbackId,
+        feedbackID,
         useDefaultActor: false,
+        // Paksa mode "Semua Komentar" (kronologis, tanpa filter "paling
+        // relevan") — tanpa sortKey ini FB default ke RANKED_THREADED yang
+        // hanya mengembalikan sebagian komentar dan pagination berhenti dini.
+        sortKey: "RANKED_UNFILTERED",
         __relay_internal__pv__IsWorkUserrelayprovider: false,
       },
-      friendlyName: "CometUFICommentsProviderPaginationQuery",
-      capturedAt: Date.now(),
-    };
+    }));
+  }
+
+  /**
+   * Paksa mode "Semua Komentar" pada template replay: clone variabel dengan
+   * `sortKey: "RANKED_UNFILTERED"` (kronologis, unfiltered). Mengembalikan
+   * template asli bila sudah ber-mode itu atau variabel tak bisa dikloning
+   * (probe memvalidasi varian ini dulu, lalu jatuh ke varian asli).
+   */
+  function forceAllComments(t) {
+    if (!t || !t.variables || typeof t.variables !== "object") return t;
+    if (t.variables.sortKey === "RANKED_UNFILTERED") return t;
+    try {
+      const variables = JSON.parse(JSON.stringify(t.variables));
+      variables.sortKey = "RANKED_UNFILTERED";
+      return { ...t, variables };
+    } catch {
+      return t;
+    }
   }
 
   async function paginateGraphql(maxMs) {
@@ -1038,36 +1222,47 @@
     if (!candidates.length) return { mode: "none", reason: "no_template" };
     const deadline = Date.now() + maxMs;
 
-    // Verify which candidate actually paginates (probe page 1 once)
+    // Verify which candidate actually paginates (probe page 1 once).
+    // Tiap kandidat di-probe dengan varian "Semua Komentar" (sortKey
+    // RANKED_UNFILTERED) dulu — jadi hasil tidak bergantung pada pilihan
+    // sortir yang tampil di halaman — lalu jatuh ke varian asli (mode user)
+    // bila FB menolak varian paksa.
     let template = null;
     let lastProbeErr = null;
     for (const cand of candidates.slice(0, 3)) {
       if (stopFlag) return { mode: "graphql", reason: "stopped" };
-      try {
-        const probe = await graphqlReplayWithBackoff(cand, null, deadline);
-        if (probe.page && probe.page.hasNext !== undefined) {
-          template = cand;
-          break;
+      const variants = [forceAllComments(cand), cand].filter(
+        (v, i, arr) => v && arr.indexOf(v) === i
+      );
+      for (const variant of variants) {
+        if (stopFlag) return { mode: "graphql", reason: "stopped" };
+        try {
+          const probe = await graphqlReplayWithBackoff(variant, null, deadline);
+          if (probe.page && probe.page.hasNext !== undefined) {
+            template = variant;
+            break;
+          }
+        } catch (err) {
+          lastProbeErr = err;
+          // Rate limit saat probe = jangan lanjut hammer; berhenti aman
+          if (err && err.kind === "rate_limit") {
+            return {
+              mode: "graphql",
+              reason: "rate_limit",
+              error: String(err.message || err),
+            };
+          }
+          if (err && err.kind === "no_login") {
+            return {
+              mode: "graphql",
+              reason: "no_login",
+              error: String(err.message || err),
+            };
+          }
+          /* coba varian berikutnya */
         }
-      } catch (err) {
-        lastProbeErr = err;
-        // Rate limit saat probe = jangan lanjut hammer; berhenti aman
-        if (err && err.kind === "rate_limit") {
-          return {
-            mode: "graphql",
-            reason: "rate_limit",
-            error: String(err.message || err),
-          };
-        }
-        if (err && err.kind === "no_login") {
-          return {
-            mode: "graphql",
-            reason: "no_login",
-            error: String(err.message || err),
-          };
-        }
-        /* try next candidate */
       }
+      if (template) break;
     }
     if (!template) {
       // Probe gagal semua — jangan paksa pagination yang pasti error
@@ -1079,6 +1274,13 @@
         };
       }
       template = candidates[0];
+    }
+
+    // Kunci target: nama dari respons GraphQL halaman hanya diproses untuk
+    // feedback id ini (anti kontaminasi postingan lain di feed).
+    if (template.variables) {
+      const v = template.variables;
+      activeFeedbackId = String(v.feedbackID || v.feedback_id || "") || null;
     }
 
     engineMode = "graphql";
@@ -1490,9 +1692,8 @@
       rounds++;
       const before = nameMap.size;
       scrapeDomNames(postRoot);
-      if (nameMap.size < 3) scrapeDomNames(document);
       drainGqlBuffer();
-      const btns = findExpandButtons(postRoot).concat(findExpandButtons(document));
+      const btns = findExpandButtons(postRoot);
       for (const b of btns.slice(0, 4)) {
         try {
           b.click();
@@ -1502,8 +1703,10 @@
         await sleepWhile(300);
       }
       try {
+        // Scroll HANYA kontainer komentar dalam post — JANGAN pernah menggeser
+        // halaman (window.scrollBy): di feed/profil itu pindah ke postingan
+        // lain dan komentarnya ikut ter-rekap (kontaminasi lintas post).
         if (scroller) scroller.scrollTop += 400;
-        else window.scrollBy(0, 350);
       } catch {
         /* ignore */
       }
@@ -1563,6 +1766,10 @@
       }
     }
     lastNewAt = Date.now();
+    activeFeedbackId = null;
+    // Simpan posisi scroll agar di akhir run halaman kembali ke postingan
+    // yang sama (bukan melayang ke postingan di atas/bawahnya).
+    const savedScrollY = window.scrollY;
 
     post("PROGRESS", {
       names: [],
@@ -1576,6 +1783,27 @@
       await sleepWhile(800);
       drainGqlBuffer();
       scrapeDomNames(postRoot);
+
+      // 1b) Synthetic template langsung dari feedback id di URL (permalink).
+      //     Selalu ditambahkan saat URL memberi id — bukan hanya saat tidak ada
+      //     capture: di halaman permalink yang tepat, synthetic (id dari URL)
+      //     memenangkan urutan candidate via filter feedbackId di
+      //     orderedCandidates (anti salah post, setara mediaId filter IG).
+      //     Sekaligus membuat halaman album/watch/slug-posts langsung bisa
+      //     paginate GraphQL tanpa perlu komentar ter-capture dulu.
+      if (!stopFlag && feedbackIdsFromUrl().length) {
+        const syns = buildSyntheticPaginationTemplates();
+        syns.forEach((syn, i) => {
+          gqlTemplates.set(
+            syns.length > 1 ? `__synthetic__${i}` : "__synthetic__",
+            syn
+          );
+        });
+        if (syns.length) {
+          lastTopLevelKey =
+            syns.length > 1 ? "__synthetic__0" : "__synthetic__";
+        }
+      }
 
       // 2) If no template yet, scroll/expand a bit to trigger FB requests
       if (gqlTemplates.size === 0) {
@@ -1592,7 +1820,7 @@
               /* ignore */
             }
           }
-          scrapeDomNames(document);
+          scrapeDomNames(postRoot);
           drainGqlBuffer();
           await sleepWhile(700);
           post("PROGRESS", {
@@ -1611,16 +1839,7 @@
       const reserveDomMs = 12_000;
       const gqlBudget = Math.max(20_000, maxMs - reserveDomMs);
 
-      // 3) Primary: GraphQL pagination (ESuit-like)
-      //    If nothing was captured (comments never opened), build the query
-      //    directly from the post id so no scrolling is needed.
-      if (gqlTemplates.size === 0 && !stopFlag) {
-        const syn = buildSyntheticPaginationTemplate();
-        if (syn) {
-          gqlTemplates.set("__synthetic__", syn);
-          lastTopLevelKey = "__synthetic__";
-        }
-      }
+      // 3) Primary: GraphQL pagination (synthetic dari URL + template capture)
       if (gqlTemplates.size > 0 && !stopFlag) {
         const g = await paginateGraphql(gqlBudget);
         finalReason = g.reason || "complete";
@@ -1658,9 +1877,9 @@
         }
       }
 
-      // 5) Final harvest
+      // 5) Final harvest — scope ke postRoot (anti kontaminasi postingan lain)
       drainGqlBuffer();
-      scrapeDomNames(document);
+      scrapeDomNames(postRoot);
 
       if (stopFlag) finalReason = "stopped";
       if (nameMap.size > 0 && finalReason === "idle") finalReason = "complete";
@@ -1697,6 +1916,12 @@
         stopFlag = false;
         try {
           postRoot?.removeAttribute?.("data-fnk-active");
+        } catch {
+          /* ignore */
+        }
+        // Kembalikan posisi scroll ke titik sebelum run dimulai.
+        try {
+          window.scrollTo(0, savedScrollY);
         } catch {
           /* ignore */
         }

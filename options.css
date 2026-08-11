@@ -57,6 +57,26 @@ body[data-theme="light"] {
   box-sizing: border-box;
 }
 
+/* ---- Material Symbols (Google) — ikon ---- */
+.rs-ic {
+  font-family: "Material Symbols Rounded";
+  font-weight: 400;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  vertical-align: middle;
+}
+
 body {
   margin: 0;
   min-width: 360px;
@@ -78,13 +98,13 @@ button {
   outline-offset: 2px;
 }
 
-/* ---- Header ---- */
+/* ---- Header (flat) ---- */
 .head {
   margin: 0 -16px 18px;
-  padding: 18px 16px 16px;
-  background: linear-gradient(135deg, var(--rs-accent) 0%, var(--rs-accent-strong) 100%);
-  color: #fff;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.14);
+  padding: 16px 16px 14px;
+  border-bottom: 1px solid var(--rs-line);
+  background: var(--rs-card);
+  color: var(--rs-text);
 }
 
 .brand {
@@ -94,23 +114,24 @@ button {
 }
 
 .logo {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  padding: 5px;
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  padding: 4px;
   object-fit: contain;
+  border: 1px solid var(--rs-line);
+  background: var(--rs-bg);
 }
 
 h1 {
   margin: 0;
-  font-size: 18px;
+  font-size: 17px;
 }
 
 .sub {
   margin: 2px 0 0;
   font-size: 12px;
-  opacity: 0.92;
+  color: var(--rs-muted);
 }
 
 /* ---- Cards ---- */
@@ -153,8 +174,27 @@ h2 {
 }
 
 .row-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font-size: 13px;
   font-weight: 600;
+}
+
+.row-label .rs-ic {
+  font-size: 17px;
+}
+
+.row-label .plat-fb {
+  color: #1877f2;
+}
+
+.row-label .plat-tt {
+  color: var(--rs-text);
+}
+
+.row-label .plat-ig {
+  color: #e1306c;
 }
 
 .switch {
@@ -215,6 +255,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 6px;
   padding: 10px 8px;
   border: 1px solid var(--rs-line);
   border-radius: 10px;
@@ -223,6 +264,10 @@ h2 {
   cursor: pointer;
   user-select: none;
   transition: background 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+}
+
+.seg .rs-ic {
+  font-size: 16px;
 }
 
 .seg:hover {
@@ -261,6 +306,9 @@ h2 {
 }
 
 .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   border: 1px solid var(--rs-line);
   background: var(--rs-card);
   color: var(--rs-text);
@@ -270,6 +318,10 @@ h2 {
   font-weight: 650;
   cursor: pointer;
   transition: background 0.15s ease, transform 0.08s ease, box-shadow 0.15s ease;
+}
+
+.btn .rs-ic {
+  font-size: 16px;
 }
 
 .btn.ghost {

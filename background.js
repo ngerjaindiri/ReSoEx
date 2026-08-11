@@ -700,6 +700,20 @@ async function handleMessage(msg, sender) {
       return { ok: true, names: merged };
     }
 
+    case "CHECK_FB_LOGIN": {
+      // Pre-flight gate sebelum run Facebook (pola IG/TT): replay GraphQL
+      // butuh sesi; tanpa cookie c_user, run hanya membuang waktu & request.
+      try {
+        const c = await chrome.cookies.get({
+          url: "https://www.facebook.com/",
+          name: "c_user",
+        });
+        return { ok: true, loggedIn: !!c };
+      } catch (e) {
+        return { ok: false, loggedIn: null, error: String(e?.message || e) };
+      }
+    }
+
     case "CHECK_IG_LOGIN": {
       // Pre-flight gate before starting an Instagram run: fail fast with
       // "perlu login" instead of burning a whole run in scroll mode.
@@ -1153,6 +1167,27 @@ async function stopActiveRun(platform) {
 async function startFacebook(tab, msg) {
   const includeReplies = msg.includeReplies !== false;
   const runId = newRunId();
+
+  // Pre-check sesi (pola IG/TT): replay GraphQL butuh cookie c_user. Gagal
+  // cepat dengan pesan jelas alih-alih run yang sia-sia saat logout.
+  try {
+    const cookie = await chrome.cookies.get({
+      url: "https://www.facebook.com/",
+      name: "c_user",
+    });
+    if (!cookie) {
+      const state = await setState("facebook", {
+        status: "error",
+        stopReason: "no_login",
+        message: reasonToMessage("no_login", 0, "facebook"),
+        tabId: tab.id,
+        runId: null,
+      });
+      return { ok: false, state, error: "Not logged in to Facebook" };
+    }
+  } catch {
+    /* cookies API unavailable — let the engine probe instead */
+  }
 
   // Stop prior run (same or other tab) so state ownership stays consistent
   const prev = await getState("facebook");

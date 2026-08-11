@@ -2,6 +2,192 @@
 
 Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
 
+## [1.0.36] — 2026-08-11
+
+### Audit hasil v1.0.35 — tutup celah kontaminasi lintas post yang tersisa
+
+- **Temuan audit**: hook fetch/XHR (always-on) mengekstrak nama dari SEMUA
+  respons GraphQL selama run berjalan — tanpa filter feedback id. Di feed
+  (atau saat user scroll manual), komentar postingan lain yang kebetulan
+  dimuat halaman ikut masuk hasil.
+- **Perbaikan**: respons halaman hanya diproses bila request-nya membawa
+  `feedbackID`/`feedback_id` postingan target — yaitu id dari URL permalink
+  atau id template yang sedang di-paginate (`activeFeedbackId`, dikunci saat
+  probe memilih template, di-reset tiap run). Request tanpa feedback id
+  (balasan, bentuk tak dikenal) tetap diproses — tidak ada regresi ekstraksi.
+- Efek: rekap FB kini konsisten anti-kontaminasi di DOM (v1.0.35), buffer
+  GraphQL, dan hook jaringan (v1.0.36).
+
+## [1.0.35] — 2026-08-11
+
+### Facebook: mode "Semua Komentar" otomatis + anti scroll ke postingan lain
+
+- **Mode sortir tidak lagi menentukan hasil rekap.** Riset: variabel internal
+  `sortKey` query `CometUFICommentsProviderPaginationQuery` memakai enum
+  `RANKED_THREADED` (Paling Relevan — default, hanya sebagian komentar),
+  `RANKED_UNFILTERED` (Semua Komentar — kronologis, unfiltered),
+  `RECENT_ACTIVITY` (Terbaru). Tanpa `sortKey`, FB default ke Paling Relevan
+  → itulah kenapa dulu kamu harus pindah ke "Semua Komentar" manual.
+- **Synthetic template (dibangun dari URL) kini memuat
+  `sortKey: "RANKED_UNFILTERED"`** — langsung paginate semua komentar tanpa
+  perlu ganti mode di halaman.
+- **Replay template capture di-probe dengan varian "Semua Komentar" dulu**
+  (fallback ke mode asli user bila FB menolak) — hasil tidak bergantung pada
+  pilihan sortir yang tampil di halaman.
+- **Hapus penyebab scroll ke postingan lain di akhir run:**
+  `window.scrollBy` di DOM fallback dihapus (scroll hanya kontainer komentar
+  dalam post), klik "lihat komentar lain" & panen nama di-scope ke post aktif
+  (bukan seluruh dokumen), dan posisi scroll halaman disimpan di awal run lalu
+  dikembalikan di akhir (postingan yang kamu proses tetap di tempat).
+
+## [1.0.34] — 2026-08-11
+
+### Audit lintas permukaan — menutup sisa ketidakseragaman
+
+- **Toggle "Balasan" di panel kini menyimpan pref seketika** (SET_STATE) —
+  parity dengan popup; sebelumnya pref baru tersimpan saat run dimulai.
+- **Prefix hint diseragamkan ke `Target:`** di semua panel & popup (TikTok
+  sebelumnya "Video:").
+- **Pesan reset/idle disamakan** antara panel dan background (FB: "…1 postingan
+  Facebook…"; IG: "…pastikan sudah login, lalu klik Proses.").
+- **Dot status "stopped" di popup → accent** (sebelumnya amber seperti partial;
+  kini konsisten dengan count panel & FAB hijau).
+- **Pembersihan kecil**: attr `checked` mati di checkbox Balasan FB; title tombol
+  Gabung popup disamakan dengan panel.
+- **RESEARCH.md seksi 16**: temuan ketidakseragaman + daftar perbedaan yang
+  sengaja dibiarkan (default includeReplies, backup popup-only, chip FB, dll).
+
+## [1.0.33] — 2026-08-11
+
+### Pacing TikTok disamakan dengan Instagram (keamanan ekstra)
+
+- Jeda antar-halaman komentar TikTok naik dari 0,7–1,6 dtk → **1,8–3,2 dtk**
+  (nilai persis Instagram).
+- Balasan: 0,4–0,8 dtk → **1,4–2,4 dtk**; jeda antar-thread balasan
+  0,3–0,7 dtk → **1,1–2,0 dtk**; retry halaman kosong → **2,5 dtk** (semua
+  identik dengan inject-ig.js).
+- Percepatan pagination adalah pemicu rate limit — pacing seragam ini
+  menurunkan risiko 429/checkpoint di TikTok.
+- Catatan: `maxMs` run TikTok tetap 120 dtk (IG 150 dtk) → tiap run lebih
+  sedikit halaman; naikkan ke 150 dtk bila ingin coverage setara.
+
+## [1.0.32] — 2026-08-11
+
+### Audit TikTok — konsistensi tuntas di 3 platform
+
+- **Deteksi halaman login HTML di engine TikTok** — sesi berakhir yang
+  me-redirect ke halaman login (HTML 200) kini memberi pesan bersih "Sesi
+  TikTok tidak aktif (login)" alih-alih dump "Respons bukan JSON:
+  <!DOCTYPE html..." (parity IG v1.0.30 / FB redirect+HTML).
+- **Sanitasi pesan error non-OK**: `API <status>: …` tidak lagi membocorkan
+  HTML mentah — diganti "halaman HTML (kemungkinan login/error)".
+- Audit TikTok menyimpulkan platform ini sudah paling selaras dengan
+  CONSISTENCY.md (badge awemeId akurat, pre-check, cooldown, backoff, budget,
+  stopReason lengkap) — **status konsistensi FB/TT/IG kini penuh** di semua
+  area checklist.
+- **RESEARCH.md seksi 15**: audit TikTok + rekomendasi terbuka (chip panel,
+  pacing).
+
+## [1.0.31] — 2026-08-11
+
+### Audit Facebook — konsistensi dengan standar IG/TK (CONSISTENCY.md)
+
+- **Pre-check login Facebook** (`CHECK_FB_LOGIN`, cookie `c_user`) — pola gagal
+  cepat identik dengan IG/TT: logout → pesan no_login sebelum run, bukan
+  menunggu probe di tengah run.
+- **Cooldown antar-run di Facebook & TikTok** — 15 dtk setelah run apa pun,
+  60 dtk setelah rate limit (nilai & pesan identik dengan IG); run beruntun
+  tidak lagi jadi pemicu 429.
+- **Bug CSS seragam**: `--rs-text-dim` dipakai tapi tak pernah didefinisikan
+  di ketiga stylesheet (warna daftar preview jatuh ke warna inherit) →
+  `var(--rs-muted)`.
+- **`mapDoneStatus` FB**: `no_template` kini dipetakan eksplisit ke error
+  (parity pola mapDone IG/TT).
+- **Hint panel FB tidak lagi basi**: "Tombol N (pojok kanan)…" (sisa FAB huruf
+  pra-v1.0.29) → "Buka permalink post, buka komentar, lalu Proses."; elemen
+  count awal `0 nama` (parity struktur TT/IG).
+- **RESEARCH.md seksi 14**: audit FB konsistensi + status; CONSISTENCY.md
+  diperbarui (pre-check login & cooldown kini ✅ di 3 platform).
+
+## [1.0.30] — 2026-08-11
+
+### Audit pertama Instagram + standar konsistensi tampilan & respon
+
+- **Dokumen baru `CONSISTENCY.md`** — aturan konsistensi tampilan & respon yang
+  menjadi standar audit/perbaikan lintas platform (token CSS, struktur panel,
+  ikon, warna status, gerak, pesan akhir via DONEMSG, stopReason/status,
+  badge akurat, pre-check, ketahanan engine, checklist audit).
+- **Header panel FB & TikTok kini flat** — gradien brand yang tersisa dari
+  pra-v1.0.29 (`#1877f2`/`#fe2c55`) dihapus; ketiga panel memakai bahasa visual
+  yang sama (IG sudah flat).
+- **Kode mati dibersihkan**: `userCollapsed` (content-fb.js, tidak pernah dibaca),
+  ternary redundan `stopExtract` TikTok, komentar boot basi TT/IG
+  ("expanded saat ada hasil" — panel tidak pernah auto-buka sejak v1.0.29).
+- **Pesan copy FB dikoreksi**: fallback menyebut `names.length` padahal yang
+  disalin `vis.length` (salah saat filter aktif) — kini konsisten dengan TT/IG.
+- **Engine IG: deteksi halaman login HTML** — sesi berakhir kini memberi pesan
+  bersih "Login Instagram diperlukan (sesi berakhir)" alih-alih dump
+  "Respons bukan JSON: <!DOCTYPE html..." (cabang `res.status === 302` selama
+  ini dead code karena fetch mengikuti redirect).
+- **RESEARCH.md seksi 13**: audit pertama Instagram (temuan diperbaiki, yang
+  sudah kuat, yang masih terbuka + verifikasi lapangan yang wajib user).
+
+## [1.0.29] — 2026-08-11
+
+### Desain Flat Minimal — ikon Material (Google), widget default tertutup
+
+- **Ikon Material Symbols (Google)** di semua permukaan — popup, options, dan
+  panel FB/TikTok/IG. Tombol aksi jadi ikon (play/stop/copy/download/merge/
+  reset/sort/close), indikator status & badge API jadi ikon + kata pendek
+  (`check_circle` Siap / `error` Belum), bukan kalimat panjang.
+- **Popup minimalis** — header flat, platform + status pakai ikon, count angka
+  besar + kata kecil terpisah, grid aksi 4 kolom ikon, search dengan ikon.
+- **Panel & FAB flat** — header tanpa gradien (kartu + garis bawah), tombol
+  ikon 3 kolom, FAB bulat solid dengan ikon `forum`, checkbox "Balasan"
+  ikon `forum` + kata pendek.
+- **Widget default TERTUTUP** — panel FB/TikTok/IG tidak lagi mengambang
+  terbuka saat halaman dimuat, saat hasil tersimpan dipulihkan, maupun saat
+  run selesai. Hasil tetap terlihat di badge jumlah FAB; panel hanya dibuka
+  oleh user (klik FAB / ikon bar Like). Sebelumnya: panel TT/IG terbuka sejak
+  awal, panel FB otomatis melebar saat ada hasil.
+- **Options flat** — header tanpa gradien, ikon platform & tema, tombol
+  "Pulihkan default" dengan ikon.
+
+## [1.0.28] — 2026-08-11
+
+### Permalink Facebook lengkap — album/gambar kolektif, watch, video.php, slug-posts
+
+- **Satu sumber deteksi URL permalink (blok `FBURLS`)** — `extractFbFeedbackIds` /
+  `extractFbFeedbackId` / `isFacebookPostPage` di `shared.js`, disalin
+  byte-identik ke `inject-fb.js` & `content-fb.js`, dijamin fixture test
+  (layout + parity 3 salinan + behavior 22 kasus URL). Sebelumnya deteksi URL
+  diduplikasi di 3 tempat dengan gap yang sama — badge, synthetic template, dan
+  pre-check kini selalu sinkron.
+- **Bentuk URL baru yang didukung** (sebelumnya MISS → synthetic GraphQL tidak
+  terbentuk): `posts/<slug>/<id>` (post gaya baru), `watch?v=`/`watch/?v=`/
+  `watch/live/?v=` (video), `video.php?v=`, `media/set/?set=a.<album>.<user>.<story>`
+  (album/gambar kolektif — story id = komponen terakhir), `photos/a.<uid>.<fbid>`
+  (album foto), `posts/<pfbid>` (post dengan id alfanumerik), nilai `story_fbid`/`fbid`
+  alfanumerik (pfbid).
+- **`set=pcb.<story>` (postingan multi-foto) — terverifikasi lapangan**: klik gambar 1
+  di post multi-foto menghasilkan URL `facebook.com/photo?fbid=<id foto>&set=pcb.<story id>`.
+  Story id dari `pcb.` kini diekstrak dengan prioritas **di atas** `fbid` (yang di URL
+  itu id foto, bukan story) — synthetic langsung menyasar komentar postingannya, sama
+  seperti foto/video tunggal.
+- **False positive dihapus**: path numerik polos (`facebook.com/<8+ digit user id>`
+  = halaman profil) tidak lagi dilaporkan sebagai post permalink.
+- **Synthetic template multi-kandidat** — engine mem-probe tiap kandidat id dari
+  URL (urutan = prioritas) dan memakai yang benar menghasilkan `page_info`;
+  robust terhadap bentuk URL yang id-nya ambigu (foto album vs story).
+- **Filter feedbackId di `orderedCandidates`** (setara `mediaId filter` IG
+  v1.0.15) — template ter-capture yang id feedback-nya cocok dengan URL
+  diutamakan, mencegah pagination komentar postingan lain dari sidebar/iklan.
+- **Deteksi `errors` GraphQL** — feedback id salah / post tidak publik kini
+  berhenti dini dan probe kandidat berikutnya, bukan diam-diam jatuh ke DOM.
+- Perbaikan langsung mengatasi laporan lapangan: klik gambar 1 di postingan
+  foto kolektif (album) kini langsung mendapat synthetic permalink, sama seperti
+  foto/video tunggal.
+
 ## [1.0.27] — 2026-08-11
 
 ### Badge "API komentar" TikTok selalu akurat (simetris dengan IG & popup)

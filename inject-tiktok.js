@@ -388,11 +388,26 @@
         e.kind = "no_login";
         throw e;
       }
-      throw new Error(`API ${res.status}: ${text.slice(0, 180)}`);
+      // Diagnosis bersih — jangan dump HTML mentah ke user (pola FB/IG).
+      const snippet = /^<!doctype html|^<html/i.test(String(text).trim())
+        ? "halaman HTML (kemungkinan login/error)"
+        : text.slice(0, 180);
+      throw new Error(`API ${res.status}: ${snippet}`);
     }
     try {
       return JSON.parse(text);
     } catch {
+      // Sesi berakhir → TT me-redirect ke halaman login (HTML 200); fetch
+      // mengikuti redirect, jadi cabang 401 di atas tak selalu terlihat.
+      // Diagnosis bersih, bukan dump HTML mentah (pola IG v1.0.30 / FB).
+      const head = String(text || "").trim().slice(0, 300).toLowerCase();
+      if (/^<!doctype html|^<html/.test(head)) {
+        const e = new Error(
+          "Sesi TikTok tidak aktif (login) — buka tiktok.com, login, lalu Proses lagi."
+        );
+        e.kind = "no_login";
+        throw e;
+      }
       const e = new Error(`Respons bukan JSON: ${text.slice(0, 120)}`);
       e.kind = "parse";
       throw e;
@@ -638,9 +653,9 @@
               replyFailStreak++;
               if (replyFailStreak >= 2) break;
             }
-            if (!(await sleepWhile(400 + Math.random() * 400))) break;
+            if (!(await sleepWhile(1400 + Math.random() * 1000))) break;
           }
-          if (!(await sleepWhile(300 + Math.random() * 400))) break;
+          if (!(await sleepWhile(1100 + Math.random() * 900))) break;
         }
       }
 
@@ -657,7 +672,7 @@
       if (page.batchSize === 0) {
         emptyPages++;
         if (emptyPages <= 2 && Date.now() - start < maxMs - 3000) {
-          await sleepWhile(700 + Math.random() * 500);
+          await sleepWhile(2500);
           continue;
         }
         reason = nameMap.size ? "idle" : "error";
@@ -674,8 +689,9 @@
           ? page.cursor
           : cursor + (page.batchSize || 20);
 
-      // polite delay
-      if (!(await sleepWhile(700 + Math.random() * 900))) {
+      // Pacing antar-halaman 1,8–3,2 dtk (nilai identik Instagram v1.0.33) —
+      // keamanan ekstra: run beruntun/pagination cepat adalah pemicu rate limit.
+      if (!(await sleepWhile(1800 + Math.random() * 1400))) {
         reason = "stopped";
         break;
       }

@@ -46,6 +46,26 @@
   outline-offset: 2px;
 }
 
+/* ---- Material Symbols (Google) — ikon panel/FAB ---- */
+#fnk-root .rs-ic {
+  font-family: "Material Symbols Rounded";
+  font-weight: 400;
+  font-style: normal;
+  font-size: 20px;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-feature-settings: "liga";
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  vertical-align: middle;
+}
+
 /* ---- Panel ---- */
 #fnk-root .fnk-panel,
 #fnk-root .fnk-fab {
@@ -66,49 +86,52 @@
   display: none;
 }
 
-/* ---- Header ---- */
+/* ---- Header (flat) ---- */
 #fnk-root .fnk-header {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 14px;
-  background: var(--rs-accent);
-  color: #fff;
+  padding: 10px 12px;
+  background: var(--rs-card);
+  border-bottom: 1px solid var(--rs-line);
+  color: var(--rs-text);
 }
 
-#fnk-root .fnk-logo {
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-weight: 800;
-  font-size: 12px;
+#fnk-root .fnk-logo-ic {
+  font-size: 18px;
+  color: var(--rs-accent);
+  flex: 0 0 auto;
 }
 
 #fnk-root .fnk-title {
   flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 700;
 }
 
 #fnk-root .fnk-min {
   border: none;
-  background: rgba(255, 255, 255, 0.18);
-  color: #fff;
-  width: 26px;
-  height: 26px;
+  background: transparent;
+  color: var(--rs-muted);
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
   cursor: pointer;
-  font-size: 16px;
-  line-height: 1;
-  transition: background 0.15s ease;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+#fnk-root .fnk-min .rs-ic {
+  font-size: 18px;
 }
 
 #fnk-root .fnk-min:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: var(--rs-bg);
+  color: var(--rs-text);
 }
 
 /* ---- Body ---- */
@@ -153,11 +176,16 @@
 #fnk-root .fnk-check {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   font-size: 12px;
   color: var(--rs-muted);
   cursor: pointer;
   user-select: none;
+}
+
+#fnk-root .fnk-check .rs-ic {
+  font-size: 16px;
+  color: var(--rs-muted);
 }
 
 #fnk-root .fnk-check input {
@@ -165,13 +193,24 @@
   accent-color: var(--rs-accent);
 }
 
-/* ---- API badge (konsisten dengan TikTok/Instagram) ---- */
+#fnk-root .fnk-check input:checked + .rs-ic {
+  color: var(--rs-accent);
+  font-variation-settings: "FILL" 1;
+}
+
+/* ---- API badge (ikon + kata pendek) ---- */
 #fnk-root .fnk-badge {
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   font-weight: 650;
-  padding: 4px 10px;
+  padding: 3px 10px;
   border-radius: 999px;
-  display: inline-block;
+}
+
+#fnk-root .fnk-badge .rs-ic {
+  font-size: 14px;
 }
 
 #fnk-root .fnk-badge.fnk-ok {
@@ -187,16 +226,25 @@
 /* ---- Tools (search + sort) ---- */
 #fnk-root .fnk-tools {
   display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 6px;
+}
+
+#fnk-root .fnk-search-ic {
+  font-size: 16px;
+  color: var(--rs-muted);
+  pointer-events: none;
+  justify-self: end;
 }
 
 #fnk-root .fnk-search {
   min-width: 0;
+  width: 100%;
   border: 1px solid var(--rs-line);
   background: var(--rs-bg);
   color: var(--rs-text);
-  border-radius: 10px;
+  border-radius: 9px;
   padding: 7px 10px;
   font-size: 12px;
   outline: none;
@@ -215,7 +263,7 @@
   word-break: break-word;
   font-size: 11.5px;
   line-height: 1.5;
-  color: var(--rs-text-dim);
+  color: var(--rs-muted);
   background: var(--rs-bg);
   border: 1px dashed var(--rs-line);
   border-radius: 10px;
@@ -223,24 +271,30 @@
   margin-top: 2px;
 }
 
-/* ---- Actions ---- */
+/* ---- Actions (ikon) ---- */
 #fnk-root .fnk-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
 }
 
 #fnk-root .fnk-btn {
   border: 1px solid var(--rs-line);
   background: var(--rs-card);
   color: var(--rs-text);
-  border-radius: 10px;
-  padding: 9px 12px;
-  font-size: 12px;
-  font-weight: 650;
+  border-radius: 9px;
+  height: 34px;
+  padding: 0;
   cursor: pointer;
   user-select: none;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+#fnk-root .fnk-btn .rs-ic {
+  font-size: 18px;
 }
 
 #fnk-root .fnk-btn:disabled {
@@ -252,14 +306,12 @@
   background: var(--rs-accent);
   border-color: var(--rs-accent);
   color: #fff;
-  grid-column: 1 / -1;
 }
 
 #fnk-root .fnk-btn.fnk-success {
   background: var(--rs-accent-2);
   border-color: var(--rs-accent-2);
   color: var(--rs-on-accent-2);
-  grid-column: 1 / -1;
 }
 
 #fnk-root .fnk-btn.fnk-ghost {
@@ -268,6 +320,12 @@
 
 #fnk-root .fnk-btn.fnk-ghost:hover {
   background: var(--rs-bg);
+}
+
+#fnk-root .fnk-btn.fnk-active {
+  color: var(--rs-accent);
+  border-color: var(--rs-accent);
+  font-variation-settings: "FILL" 1;
 }
 
 /* ===== Icon di bar Like / Comment / Share (minimal) ===== */
@@ -358,21 +416,26 @@
   }
 }
 
-/* ---- FAB (model interaksi seragam dengan TikTok/Instagram) ---- */
+/* ---- FAB (flat, ikon) ---- */
 #fnk-root .fnk-fab {
   width: 48px;
   height: 48px;
   border-radius: 50%;
   border: none;
-  background: linear-gradient(135deg, #1877f2 0%, #0a5fd4 100%);
+  background: var(--rs-accent);
   color: #fff;
-  font-weight: 900;
-  font-size: 18px;
   cursor: pointer;
-  box-shadow: 0 6px 18px rgba(24, 119, 242, 0.45);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   float: right;
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: background 0.2s ease, transform 0.12s ease, box-shadow 0.2s ease;
+}
+
+#fnk-root .fnk-fab .rs-ic {
+  font-size: 22px;
 }
 
 #fnk-root .fnk-fab:hover {
@@ -447,12 +510,7 @@
   --rs-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
 }
 
-/* ===== Modern polish: gradient header, micro-interactions, running feedback ===== */
-#fnk-root .fnk-header {
-  background: linear-gradient(135deg, #1877f2 0%, #0a5fd4 100%);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08) inset;
-}
-
+/* ===== Micro-interactions & running feedback (header flat — parity dengan IG) ===== */
 #fnk-root .fnk-panel {
   animation: fnk-rise 0.18s ease-out;
 }

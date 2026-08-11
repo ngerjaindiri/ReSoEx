@@ -4,55 +4,110 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ReSo Ekstention</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block"
+    />
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
     <header class="head">
       <div class="brand">
         <img class="logo" src="logo.svg" alt="ReSo" />
-        <div>
+        <div class="brand-txt">
           <h1 id="headerTitle">ReSo Ekstention</h1>
           <p class="sub" id="headerSub">Nama komentator → copy ke Excel</p>
         </div>
-        <button id="btnOptions" class="icon-btn" type="button" title="Pengaturan" aria-label="Buka pengaturan">⚙</button>
       </div>
+      <button
+        id="btnOptions"
+        class="icon-btn"
+        type="button"
+        title="Pengaturan"
+        aria-label="Buka pengaturan"
+      >
+        <span class="rs-ic" aria-hidden="true">settings</span>
+      </button>
     </header>
 
     <main>
-      <!-- Platform indicator -->
-      <div id="platformBadge" class="platform-badge">Mendeteksi platform…</div>
+      <!-- Platform + status (ikon, bukan kalimat) -->
+      <div id="platformBadge" class="platform-badge">
+        <span class="rs-ic plat-ic" id="platformIcon" aria-hidden="true">public</span>
+        <span id="platformName">Mendeteksi…</span>
+        <span id="platformDot" class="dot" aria-hidden="true"></span>
+      </div>
 
       <section class="card">
-        <div id="status" class="status" aria-live="polite">Memuat…</div>
-        <div id="hint" class="hint"></div>
-        <!-- TikTok-only: API badge -->
-        <div id="apiBadge" class="api-badge" hidden>API: …</div>
-        <div id="count" class="count">0 nama</div>
+        <div class="statusrow">
+          <span id="statIcon" class="rs-ic stat-ic" aria-hidden="true"></span>
+          <div id="status" class="status" aria-live="polite">Memuat…</div>
+        </div>
+        <div id="hint" class="hint" hidden></div>
+        <div id="apiBadge" class="api-badge" hidden>
+          <span class="rs-ic" aria-hidden="true">check_circle</span>
+        </div>
+        <div class="countrow">
+          <span id="count" class="count">0</span>
+          <span id="countWord" class="count-word">nama</span>
+        </div>
         <pre id="preview" class="preview" hidden></pre>
       </section>
 
-      <label class="check">
-        <input id="includeReplies" type="checkbox" />
-        Sertakan balasan (reply)
-      </label>
-
       <section class="tools">
-        <input id="searchInput" class="search" type="search" placeholder="Cari nama…" aria-label="Cari nama" />
-        <button id="btnSort" class="btn" type="button" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+        <label class="searchwrap">
+          <span class="rs-ic" aria-hidden="true">search</span>
+          <input
+            id="searchInput"
+            class="search"
+            type="search"
+            placeholder="Cari…"
+            aria-label="Cari nama"
+          />
+        </label>
+        <button
+          id="btnSort"
+          class="icon-btn"
+          type="button"
+          title="Urutkan A–Z"
+          aria-label="Urutkan A–Z"
+          aria-pressed="false"
+        >
+          <span class="rs-ic" aria-hidden="true">sort</span>
+        </button>
+        <label class="icon-btn toggle" title="Sertakan balasan" aria-label="Sertakan balasan">
+          <input id="includeReplies" type="checkbox" hidden />
+          <span class="rs-ic" aria-hidden="true">forum</span>
+        </label>
       </section>
 
       <section class="actions">
-        <button id="btnProcess" class="btn primary" type="button" title="Mulai ambil nama">Proses</button>
-        <button id="btnStop" class="btn" type="button" hidden title="Hentikan">Stop</button>
-        <button id="btnCopy" class="btn success" type="button" disabled title="Salin ke clipboard">Copy nama</button>
-        <button id="btnReset" class="btn ghost" type="button" title="Bersihkan hasil & reset">Reset</button>
-      </section>
-
-      <section class="actions export">
-        <button id="btnCsv" class="btn" type="button" disabled title="Simpan nama ke file CSV (siap Excel)">Ekspor CSV</button>
-        <button id="btnMerge" class="btn" type="button" title="Gabungkan nama unik Facebook + TikTok + Instagram lalu salin">Gabung Semua</button>
-        <button id="btnBackup" class="btn" type="button" title="Simpan hasil & pengaturan ke file JSON">Backup</button>
-        <button id="btnRestore" class="btn" type="button" title="Pulihkan hasil dari file backup JSON">Pulihkan</button>
+        <button id="btnProcess" class="act act-primary" type="button" title="Mulai ambil nama" aria-label="Mulai ambil nama">
+          <span class="rs-ic" aria-hidden="true">play_arrow</span>
+        </button>
+        <button id="btnStop" class="act" type="button" hidden title="Hentikan" aria-label="Hentikan">
+          <span class="rs-ic" aria-hidden="true">stop</span>
+        </button>
+        <button id="btnCopy" class="act act-success" type="button" disabled title="Salin ke clipboard" aria-label="Salin ke clipboard">
+          <span class="rs-ic" aria-hidden="true">content_copy</span>
+        </button>
+        <button id="btnReset" class="act" type="button" title="Bersihkan hasil" aria-label="Bersihkan hasil">
+          <span class="rs-ic" aria-hidden="true">restart_alt</span>
+        </button>
+        <button id="btnCsv" class="act" type="button" disabled title="Simpan ke CSV (Excel)" aria-label="Simpan ke CSV">
+          <span class="rs-ic" aria-hidden="true">download</span>
+        </button>
+        <button id="btnMerge" class="act" type="button" title="Gabung FB + TikTok + IG lalu salin" aria-label="Gabung semua platform">
+          <span class="rs-ic" aria-hidden="true">merge_type</span>
+        </button>
+        <button id="btnBackup" class="act" type="button" title="Backup ke JSON" aria-label="Backup ke JSON">
+          <span class="rs-ic" aria-hidden="true">save</span>
+        </button>
+        <button id="btnRestore" class="act" type="button" title="Pulihkan dari backup" aria-label="Pulihkan dari backup">
+          <span class="rs-ic" aria-hidden="true">restore</span>
+        </button>
         <input id="fileRestore" type="file" accept="application/json,.json" hidden />
       </section>
 
