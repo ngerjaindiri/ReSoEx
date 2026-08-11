@@ -5,22 +5,34 @@
 import {
   STORAGE_KEY_FB,
   STORAGE_KEY_TT,
+  STORAGE_KEY_IG,
   URL_TEMPLATE_KEY,
   URL_META_KEY,
+  IG_TEMPLATE_KEY,
+  IG_META_KEY,
+  SAVED_KEY,
+  PREFS_KEY,
   defaultStateFor,
   applyStatePatch,
   mergeNames,
   reasonToMessage,
   isFacebookUrl,
   isTikTokUrl,
+  isInstagramUrl,
   detectPlatform,
   extractAwemeId,
+  extractInstagramShortcode,
   newRunId,
   isStaleRun,
   storageKeyFor,
   sanitizeTikTokTemplateUrl,
   isTikTokTemplateValid,
+  sanitizeInstagramTemplateUrl,
+  isInstagramTemplateValid,
+  sanitizeEngineOptions,
 } from "./shared.js";
+
+const PLATFORMS = ["facebook", "tiktok", "instagram"];
 
 // ===================== State Helpers =====================
 
@@ -41,8 +53,109 @@ async function setState(platform, patch) {
     next.hasTemplate = isTikTokTemplateValid(url, meta);
   }
 
+  // Instagram: enrich with template flag (session + TTL)
+  if (platform === "instagram") {
+    const { url, meta } = await getIgTemplate();
+    next.hasTemplate = isInstagramTemplateValid(url, meta);
+  }
+
   await chrome.storage.session.set({ [key]: next });
+  updateBadge().catch(() => {});
   return next;
+}
+
+// ===================== Toolbar Badge =====================
+
+/** Show the collected count for the active platform on the toolbar icon. */
+async function updateBadge() {
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    const p = detectPlatform(tab?.url);
+    if (!p) {
+      await chrome.action.setBadgeText({ text: "" });
+      return;
+    }
+    const state = await getState(p);
+    const n = state.names?.length || 0;
+    const running = state.status === "running";
+    let text = "";
+    let color = "#6366f1";
+    if (running) {
+      text = n ? (n > 999 ? "999+" : String(n)) : "…";
+    } else if (n) {
+      text = n > 999 ? "999+" : String(n);
+      color = state.status === "done" ? "#42b72a" : "#f7b928";
+    }
+    await chrome.action.setBadgeText({ text });
+    await chrome.action.setBadgeBackgroundColor({ color });
+  } catch {
+    /* badge is cosmetic — never block state flow */
+  }
+}
+
+// ===================== Persisted Results & Prefs (local) =====================
+
+/** Save the final names of a finished run so results survive browser restarts. */
+async function persistResult(platform, state) {
+  if (!Array.isArray(state.names) || !state.names.length) return;
+  const data = await chrome.storage.local.get(SAVED_KEY);
+  const saved = {
+    ...(data[SAVED_KEY] || {}),
+    [platform]: {
+      names: state.names,
+      count: state.names.length,
+      savedAt: Date.now(),
+    },
+  };
+  await chrome.storage.local.set({ [SAVED_KEY]: saved });
+}
+
+async function clearSaved(platform) {
+  const data = await chrome.storage.local.get(SAVED_KEY);
+  const saved = { ...(data[SAVED_KEY] || {}) };
+  if (saved[platform]) {
+    delete saved[platform];
+    await chrome.storage.local.set({ [SAVED_KEY]: saved });
+  }
+}
+
+async function saveIncludeRepliesPref(platform, includeReplies) {
+  const data = await chrome.storage.local.get(PREFS_KEY);
+  const prefs = data[PREFS_KEY] || {};
+  const next = {
+    ...prefs,
+    includeReplies: {
+      ...(prefs.includeReplies || {}),
+      [platform]: includeReplies,
+    },
+  };
+  await chrome.storage.local.set({ [PREFS_KEY]: next });
+}
+
+/**
+ * If the session has no run yet, surface a previously saved result (or the
+ * saved includeReplies preference) so nothing is lost after a browser restart.
+ */
+async function restoreSavedIfIdle(state, platform) {
+  if (state.status !== "idle" || state.names.length) return state;
+  const data = await chrome.storage.local.get([SAVED_KEY, PREFS_KEY]);
+  const saved = data[SAVED_KEY]?.[platform];
+  if (saved && Array.isArray(saved.names) && saved.names.length) {
+    const word = platform === "instagram" ? "username" : "nama";
+    return {
+      ...state,
+      status: "done",
+      names: saved.names,
+      count: saved.names.length,
+      message: `Hasil tersimpan (${new Date(saved.savedAt).toLocaleString("id-ID")}) — ${saved.names.length} ${word}. Klik Copy / Reset untuk hapus.`,
+    };
+  }
+  const pref = data[PREFS_KEY]?.includeReplies?.[platform];
+  if (typeof pref === "boolean") state.includeReplies = pref;
+  return state;
 }
 
 /**
@@ -71,6 +184,36 @@ async function getTemplate(requiredAwemeId = null) {
     return { url: null, meta };
   }
 
+  return { url, meta };
+}
+
+/**
+ * Instagram comments API template — session storage, TTL, optional media filter.
+ */
+async function getIgTemplate(requiredMediaId = null) {
+  const data = await chrome.storage.session.get([
+    IG_TEMPLATE_KEY,
+    IG_META_KEY,
+  ]);
+  const url = data[IG_TEMPLATE_KEY] || null;
+  const meta = data[IG_META_KEY] || null;
+
+  if (url && !isInstagramTemplateValid(url, meta, null)) {
+    try {
+      await chrome.storage.session.remove([IG_TEMPLATE_KEY, IG_META_KEY]);
+    } catch (e) {
+      console.debug("[ReSo] remove expired IG template:", e?.message);
+    }
+    return { url: null, meta: null };
+  }
+  if (!isInstagramTemplateValid(url, meta, requiredMediaId)) {
+    return { url: null, meta };
+  }
+  return { url, meta };
+}
+
+async function getIgReplayTemplate() {
+  const { url, meta } = await getIgTemplate();
   return { url, meta };
 }
 
@@ -110,7 +253,12 @@ async function getReplayTemplate(awemeId = null) {
 
 /** Install MAIN-world extract engine (idempotent). */
 async function injectMain(tabId, platform) {
-  const file = platform === "tiktok" ? "inject-tiktok.js" : "inject-fb.js";
+  const file =
+    platform === "tiktok"
+      ? "inject-tiktok.js"
+      : platform === "instagram"
+        ? "inject-ig.js"
+        : "inject-fb.js";
   try {
     await chrome.scripting.executeScript({
       target: { tabId, allFrames: false },
@@ -135,55 +283,6 @@ async function injectMain(tabId, platform) {
 }
 
 /**
- * Sanitize START options before crossing into MAIN world.
- */
-function sanitizeEngineOptions(cmd, options, platform) {
-  const raw = options && typeof options === "object" ? options : {};
-  if (cmd === "SET_TEMPLATE") {
-    const url =
-      typeof raw.templateUrl === "string" ? raw.templateUrl.slice(0, 4000) : null;
-    if (
-      url &&
-      (!url.toLowerCase().includes("tiktok.com/api/comment/list") ||
-        url.toLowerCase().includes("/list/reply"))
-    ) {
-      return { templateUrl: null };
-    }
-    return { templateUrl: url };
-  }
-  if (cmd !== "START") return {};
-
-  const maxMs = Number(raw.maxMs);
-  const out = {
-    maxMs: Number.isFinite(maxMs)
-      ? Math.min(180_000, Math.max(8_000, maxMs))
-      : platform === "tiktok"
-        ? 120_000
-        : 150_000,
-    includeReplies:
-      platform === "tiktok" ? raw.includeReplies === true : raw.includeReplies !== false,
-    runId:
-      typeof raw.runId === "string" && raw.runId.length <= 80
-        ? raw.runId
-        : null,
-  };
-  if (platform === "tiktok") {
-    const aweme =
-      raw.awemeId != null ? String(raw.awemeId).replace(/\D/g, "").slice(0, 32) : "";
-    out.awemeId = aweme || null;
-    const url =
-      typeof raw.templateUrl === "string" ? raw.templateUrl.slice(0, 4000) : null;
-    out.templateUrl =
-      url &&
-      url.toLowerCase().includes("tiktok.com/api/comment/list") &&
-      !url.toLowerCase().includes("/list/reply")
-        ? url
-        : null;
-  }
-  return out;
-}
-
-/**
  * Control plane: call non-enumerable engine API in MAIN world.
  * Avoids spoofable window.postMessage START/STOP.
  */
@@ -195,7 +294,12 @@ async function engineCmd(tabId, platform, cmd, options = {}) {
       target: { tabId, allFrames: false },
       world: "MAIN",
       func: (plat, command, opts) => {
-        const key = plat === "tiktok" ? "__RESO_TNK__" : "__RESO_FNK__";
+        const key =
+          plat === "tiktok"
+            ? "__RESO_TNK__"
+            : plat === "instagram"
+              ? "__RESO_ING__"
+              : "__RESO_FNK__";
         const eng = window[key];
         if (!eng) return { ok: false, error: "no_engine" };
         if (command === "PING") {
@@ -233,9 +337,17 @@ async function ensureContent(tabId, platform) {
     return true;
   } catch {
     const jsFile =
-      platform === "tiktok" ? "content-tiktok.js" : "content-fb.js";
+      platform === "tiktok"
+        ? "content-tiktok.js"
+        : platform === "instagram"
+          ? "content-ig.js"
+          : "content-fb.js";
     const cssFile =
-      platform === "tiktok" ? "content-tiktok.css" : "content-fb.css";
+      platform === "tiktok"
+        ? "content-tiktok.css"
+        : platform === "instagram"
+          ? "content-ig.css"
+          : "content-fb.css";
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
@@ -258,10 +370,15 @@ async function ensureContent(tabId, platform) {
 function statusFromReason(reason, count) {
   if (reason === "stopped") return "stopped";
   if (reason === "timeout") return "partial";
+  if (reason === "rate_limit") return count > 0 ? "partial" : "error";
+  if (reason === "blocked") return count > 0 ? "partial" : "error";
+  if (reason === "checkpoint") return count > 0 ? "partial" : "error";
   if (
     reason === "error" ||
     reason === "no_template" ||
-    reason === "no_video"
+    reason === "no_video" ||
+    reason === "no_login" ||
+    reason === "no_media"
   )
     return "error";
   if (reason === "complete" || reason === "idle")
@@ -278,6 +395,79 @@ function isCommentListUrl(url) {
   if (u.includes("tiktok.com/api/comment/list/reply")) return false;
   return true;
 }
+
+// ===================== Instagram webRequest Capture =====================
+
+function isIgCommentsUrl(url) {
+  if (!url) return false;
+  const u = url.toLowerCase();
+  if (!u.includes("instagram.com/api/v1/media/")) return false;
+  if (!u.includes("/comments/")) return false;
+  if (u.includes("/inline_child_comments")) return false;
+  return true;
+}
+
+// Observational only — capture URL shape, no headers needed
+chrome.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (!isIgCommentsUrl(details.url)) return;
+    const clean = sanitizeInstagramTemplateUrl(details.url);
+    if (!clean) return;
+    const mediaId =
+      details.url.match(/instagram\.com\/api\/v1\/media\/(\d+)\//)?.[1] ||
+      null;
+    (async () => {
+      try {
+        // Jangan timpa template media lain saat run aktif (pola guard TikTok):
+        // bila run sedang memproses media X dengan template valid, capture dari
+        // media lain (user scroll ke post/reel beda) dilewati — stabilitas
+        // pagination & target run berikutnya tetap terjaga.
+        const st = await getState("instagram");
+        const prev = await chrome.storage.session.get([
+          IG_TEMPLATE_KEY,
+          IG_META_KEY,
+        ]);
+        const prevMeta = prev[IG_META_KEY] || null;
+        const prevUrl = prev[IG_TEMPLATE_KEY] || null;
+        const prevValid = isInstagramTemplateValid(prevUrl, prevMeta, null);
+        const runMediaId =
+          (st.postHint || "").match(/media\s+(\d+)/)?.[1] || null;
+        if (
+          st.status === "running" &&
+          prevValid &&
+          runMediaId &&
+          prevMeta?.mediaId &&
+          String(prevMeta.mediaId) === String(runMediaId) &&
+          mediaId &&
+          String(mediaId) !== String(runMediaId)
+        ) {
+          return;
+        }
+
+        await chrome.storage.session.set({
+          [IG_TEMPLATE_KEY]: clean,
+          [IG_META_KEY]: {
+            capturedAt: Date.now(),
+            mediaId,
+            tabId: details.tabId,
+          },
+        });
+        if (st.status === "running") {
+          await setState("instagram", { hasTemplate: true });
+        } else {
+          await setState("instagram", {
+            hasTemplate: true,
+            message:
+              "Template API komentar siap. Klik Proses untuk ambil username.",
+          });
+        }
+      } catch (e) {
+        console.warn("[ReSo] IG webRequest template capture failed:", e?.message);
+      }
+    })();
+  },
+  { urls: ["*://*.instagram.com/*"] }
+);
 
 // Observational only — capture URL shape, no headers needed
 chrome.webRequest.onBeforeRequest.addListener(
@@ -351,6 +541,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   await chrome.storage.session.set({
     [STORAGE_KEY_FB]: { ...defaultStateFor("facebook") },
     [STORAGE_KEY_TT]: { ...defaultStateFor("tiktok") },
+    [STORAGE_KEY_IG]: { ...defaultStateFor("instagram") },
   });
   // Drop legacy local template keys from pre-Sprint-A builds
   try {
@@ -358,22 +549,46 @@ chrome.runtime.onInstalled.addListener(async () => {
   } catch (e) {
     console.debug("[ReSo] onInstalled cleanup:", e?.message);
   }
+  ensureContextMenus();
 });
 
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
   const url = tab?.url;
   if (!url) return;
+  if (changeInfo.status === "complete") updateBadge().catch(() => {});
 
   if (isFacebookUrl(url)) {
     // Inject early on loading so GraphQL buffer captures comments from the start
     if (changeInfo.status === "loading") {
       await injectMain(tabId, "facebook");
     }
-  } else if (isTikTokUrl(url)) {
+  } else if (isTikTokUrl(url) || isInstagramUrl(url)) {
     if (changeInfo.status === "complete") {
-      await injectMain(tabId, "tiktok");
+      await injectMain(tabId, isTikTokUrl(url) ? "tiktok" : "instagram");
     }
   }
+});
+
+// If the tab owning a run is closed, finalize the run instead of leaving it hung
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  for (const p of PLATFORMS) {
+    const state = await getState(p);
+    if (state.status !== "running" || state.tabId !== tabId) continue;
+    const count = state.names?.length || 0;
+    const finalState = await setState(p, {
+      status: count ? "stopped" : "idle",
+      names: state.names || [],
+      stopReason: "stopped",
+      message: reasonToMessage("stopped", count, p, "(tab ditutup)"),
+      tabId: null,
+      runId: null,
+    });
+    if (count) persistResult(p, finalState).catch(() => {});
+  }
+});
+
+chrome.tabs.onActivated.addListener(() => {
+  updateBadge().catch(() => {});
 });
 
 // ===================== Message Router =====================
@@ -430,10 +645,67 @@ async function handleMessage(msg, sender) {
         const replay = await getReplayTemplate(aweme);
         state.hasTemplate = !!replay.url;
       }
-      return { ok: true, state, platform };
+      if (platform === "instagram") {
+        // Simetris dengan TikTok: recompute dari session template (TTL + shape)
+        // agar badge API popup selalu akurat — bahkan saat service worker baru
+        // bangun / state session belum di-set ulang lewat setState.
+        const ig = await getIgReplayTemplate();
+        state.hasTemplate = !!ig.url;
+      }
+      return { ok: true, state: await restoreSavedIfIdle(state, platform), platform };
+    }
+
+    case "GET_ALL_STATE": {
+      // Restore persisted results so the merge button sees all platforms
+      // even right after a browser restart (session state is empty then).
+      const facebook = await restoreSavedIfIdle(
+        await getState("facebook"),
+        "facebook"
+      );
+      const tiktok = await restoreSavedIfIdle(
+        await getState("tiktok"),
+        "tiktok"
+      );
+      const instagram = await restoreSavedIfIdle(
+        await getState("instagram"),
+        "instagram"
+      );
+      return { ok: true, facebook, tiktok, instagram };
+    }
+
+    case "CHECK_IG_LOGIN": {
+      // Pre-flight gate before starting an Instagram run: fail fast with
+      // "perlu login" instead of burning a whole run in scroll mode.
+      try {
+        const c = await chrome.cookies.get({
+          url: "https://www.instagram.com/",
+          name: "sessionid",
+        });
+        return { ok: true, loggedIn: !!c };
+      } catch (e) {
+        return { ok: false, loggedIn: null, error: String(e?.message || e) };
+      }
+    }
+
+    case "CHECK_TT_LOGIN": {
+      // Pre-flight gate for TikTok (pola IG): replay comment/list butuh sesi;
+      // tanpa cookie sessionid, run hanya membuang waktu & request.
+      try {
+        const c = await chrome.cookies.get({
+          url: "https://www.tiktok.com/",
+          name: "sessionid",
+        });
+        return { ok: true, loggedIn: !!c };
+      } catch (e) {
+        return { ok: false, loggedIn: null, error: String(e?.message || e) };
+      }
     }
 
     case "GET_TEMPLATE": {
+      if (platform === "instagram") {
+        const ig = await getIgReplayTemplate();
+        return { ok: true, url: ig.url, meta: ig.meta, sameVideo: true };
+      }
       const awemeId = msg.awemeId || null;
       // Prefer same-video; fall back to replayable structure within TTL
       const strict = await getTemplate(awemeId);
@@ -521,6 +793,9 @@ async function handleMessage(msg, sender) {
         }
       }
 
+      if (typeof patch.includeReplies === "boolean") {
+        saveIncludeRepliesPref(platform, patch.includeReplies).catch(() => {});
+      }
       return {
         ok: true,
         state: await setState(platform, patch),
@@ -570,17 +845,30 @@ async function handleMessage(msg, sender) {
               videoHint: "",
               runId: null,
             }
-          : {
-              status: "idle",
-              names: [],
-              count: 0,
-              message: "Buka 1 postingan Facebook, lalu klik Proses.",
-              tabId: null,
-              stopReason: null,
-              postHint: "",
-              runId: null,
-            };
+          : p === "instagram"
+            ? {
+                status: "idle",
+                names: [],
+                count: 0,
+                message:
+                  "Buka post/reel Instagram, pastikan sudah login, lalu klik Proses.",
+                tabId: null,
+                stopReason: null,
+                postHint: "",
+                runId: null,
+              }
+            : {
+                status: "idle",
+                names: [],
+                count: 0,
+                message: "Buka 1 postingan Facebook, lalu klik Proses.",
+                tabId: null,
+                stopReason: null,
+                postHint: "",
+                runId: null,
+              };
       const state = await setState(p, resetPatch);
+      await clearSaved(p);
       return { ok: true, state };
     }
 
@@ -699,6 +987,11 @@ async function handleMessage(msg, sender) {
       );
       const stopReason = msg.stopReason || "complete";
       const status = statusFromReason(stopReason, names.length);
+      // Carry the engine's rate-limit diagnosis (e.g. IG 429) to the user
+      // instead of collapsing it into a generic "timeout" message.
+      const hint = p === "tiktok" ? msg.videoHint : msg.postHint;
+      const extra =
+        typeof hint === "string" && /rate\s*limit|429/i.test(hint) ? hint : "";
       const patchObj = {
         status,
         names,
@@ -707,7 +1000,7 @@ async function handleMessage(msg, sender) {
           stopReason,
           names.length,
           p,
-          typeof msg.extra === "string" ? msg.extra.slice(0, 200) : ""
+          typeof msg.extra === "string" ? msg.extra.slice(0, 200) : extra
         ),
         tabId: sender.tab.id,
         runId: prev.runId,
@@ -717,7 +1010,11 @@ async function handleMessage(msg, sender) {
       } else {
         patchObj.postHint = msg.postHint ?? prev.postHint;
       }
-      return { ok: true, state: await setState(p, patchObj) };
+      const state = await setState(p, patchObj);
+      if (["done", "partial", "stopped", "error"].includes(state.status)) {
+        persistResult(p, state).catch(() => {});
+      }
+      return { ok: true, state };
     }
 
     case "NAMES_ERROR": {
@@ -764,19 +1061,21 @@ async function handleMessage(msg, sender) {
           state: null,
           platform: null,
           error: "Not on supported platform",
-          message: "Buka tab Facebook atau TikTok terlebih dahulu.",
+          message: "Buka tab Facebook, TikTok, atau Instagram terlebih dahulu.",
         };
       }
 
       if (p === "facebook") {
         return await startFacebook(tab, msg);
-      } else {
+      } else if (p === "tiktok") {
         return await startTikTok(tab, msg);
+      } else {
+        return await startInstagram(tab, msg);
       }
     }
 
     case "STOP_FROM_POPUP": {
-      for (const p of ["facebook", "tiktok"]) {
+      for (const p of PLATFORMS) {
         const state = await getState(p);
         if (state.status === "running") {
           await stopActiveRun(p);
@@ -815,12 +1114,13 @@ async function stopActiveRun(platform) {
       console.debug("[ReSo] stopActiveRun engine:", e?.message);
     }
   }
-  await setState(platform, {
+  const finalState = await setState(platform, {
     status: state.names?.length ? "stopped" : "idle",
     stopReason: "stopped",
     message: reasonToMessage("stopped", state.names?.length || 0, platform),
     runId: null,
   });
+  if (finalState.names?.length) persistResult(platform, finalState).catch(() => {});
 }
 
 async function startFacebook(tab, msg) {
@@ -879,6 +1179,27 @@ async function startFacebook(tab, msg) {
 }
 
 async function startTikTok(tab, msg) {
+  // Pre-check sesi (pola IG): replay API komentar butuh cookie sessionid.
+  // Gagal cepat dengan pesan jelas alih-alih run yang sia-sia saat logout.
+  try {
+    const cookie = await chrome.cookies.get({
+      url: "https://www.tiktok.com/",
+      name: "sessionid",
+    });
+    if (!cookie) {
+      const state = await setState("tiktok", {
+        status: "error",
+        stopReason: "no_login",
+        message: reasonToMessage("no_login", 0, "tiktok"),
+        tabId: tab.id,
+        runId: null,
+      });
+      return { ok: false, state, error: "Not logged in to TikTok" };
+    }
+  } catch {
+    /* cookies API unavailable — let the engine probe instead */
+  }
+
   const awemeId = extractAwemeId(tab.url);
   if (!awemeId) {
     const state = await setState("tiktok", {
@@ -947,3 +1268,190 @@ async function startTikTok(tab, msg) {
   }
   return { ok: true, runId, state: await getState("tiktok") };
 }
+
+async function startInstagram(tab, msg) {
+  // Pre-check login so popup/shortcut/context-menu fail fast with a clear
+  // message instead of a wasted run (IG gates every API call on sessionid).
+  try {
+    const cookie = await chrome.cookies.get({
+      url: "https://www.instagram.com/",
+      name: "sessionid",
+    });
+    if (!cookie) {
+      const state = await setState("instagram", {
+        status: "error",
+        stopReason: "no_login",
+        message: reasonToMessage("no_login", 0, "instagram"),
+        tabId: tab.id,
+        runId: null,
+      });
+      return { ok: false, state, error: "Not logged in to Instagram" };
+    }
+  } catch {
+    /* cookies API unavailable — let the engine probe instead */
+  }
+
+  // Pre-check halaman: tanpa shortcode (profil/feed), media_id tak bisa
+  // ditentukan → gagal cepat (pola no_video TikTok).
+  if (!extractInstagramShortcode(tab?.url)) {
+    const state = await setState("instagram", {
+      status: "error",
+      stopReason: "no_media",
+      message: reasonToMessage("no_media", 0, "instagram"),
+      tabId: tab.id,
+      runId: null,
+    });
+    return { ok: false, state, error: "Not on an Instagram post page" };
+  }
+
+  const { url: template } = await getIgReplayTemplate();
+  const runId = newRunId();
+
+  const prev = await getState("instagram");
+  if (prev.status === "running") {
+    await stopActiveRun("instagram");
+    await new Promise((r) => setTimeout(r, 80));
+  }
+
+  await setState("instagram", {
+    status: "running",
+    names: [],
+    count: 0,
+    message: template
+      ? "Memulai ekstrak…"
+      : "Memulai… (API belum ter-capture — pastikan sudah login & buka komentar)",
+    tabId: tab.id,
+    stopReason: null,
+    postHint: "",
+    includeReplies: msg.includeReplies === true,
+    runId,
+    hasTemplate: !!template,
+  });
+
+  const contentOk = await ensureContent(tab.id, "instagram");
+  if (!contentOk) {
+    const state = await setState("instagram", {
+      status: "error",
+      stopReason: "error",
+      message:
+        "Gagal memuat content script. Refresh halaman Instagram lalu coba lagi.",
+      runId: null,
+    });
+    return { ok: false, state, error: "ensureContent failed" };
+  }
+  await new Promise((r) => setTimeout(r, 120));
+
+  try {
+    await chrome.tabs.sendMessage(tab.id, {
+      type: "START_EXTRACT",
+      includeReplies: msg.includeReplies === true,
+      templateUrl: template || null,
+      runId,
+    });
+  } catch (err) {
+    const state = await setState("instagram", {
+      status: "error",
+      stopReason: "error",
+      message:
+        "Gagal menghubungi halaman. Refresh halaman Instagram lalu coba lagi.",
+      runId: null,
+    });
+    return { ok: false, state, error: String(err?.message || err) };
+  }
+  return { ok: true, runId, state: await getState("instagram") };
+}
+
+// ===================== Context Menus & Keyboard Shortcuts =====================
+
+function ensureContextMenus() {
+  try {
+    chrome.contextMenus.removeAll(() => {
+      chrome.contextMenus.create({
+        id: "reso-page",
+        title: "ReSo — Ambil nama komentator halaman ini",
+        contexts: ["page"],
+      });
+      chrome.contextMenus.create({
+        id: "reso-link",
+        title: "ReSo — Buka & ambil nama dari tautan ini",
+        contexts: ["link"],
+      });
+    });
+  } catch (e) {
+    console.debug("[ReSo] contextMenus init:", e?.message);
+  }
+}
+ensureContextMenus();
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  try {
+    if (info.menuItemId === "reso-link") {
+      const url = info.linkUrl;
+      const p = detectPlatform(url);
+      if (!p) return;
+      const newTab = await chrome.tabs.create({ url, active: true });
+      await waitTabComplete(newTab.id, 25000);
+      if (p === "facebook") {
+        await startFacebook(newTab, { includeReplies: true });
+      } else if (p === "tiktok") {
+        await startTikTok(newTab, { includeReplies: false });
+      } else {
+        await startInstagram(newTab, { includeReplies: false });
+      }
+    } else if (info.menuItemId === "reso-page") {
+      const p = detectPlatform(tab?.url);
+      if (!p || !tab?.id) return;
+      const data = await chrome.storage.local.get(PREFS_KEY);
+      const includeReplies =
+        data[PREFS_KEY]?.includeReplies?.[p] ?? p === "facebook";
+      if (p === "facebook") await startFacebook(tab, { includeReplies });
+      else if (p === "tiktok") await startTikTok(tab, { includeReplies });
+      else await startInstagram(tab, { includeReplies });
+    }
+  } catch (e) {
+    console.debug("[ReSo] context menu:", e?.message);
+  }
+});
+
+function waitTabComplete(tabId, timeoutMs) {
+  return new Promise((resolve) => {
+    const done = () => resolve();
+    const timer = setTimeout(done, timeoutMs);
+    const onUpdated = (id, info) => {
+      if (id === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(timer);
+        done();
+      }
+    };
+    chrome.tabs.onUpdated.addListener(onUpdated);
+  });
+}
+
+chrome.commands.onCommand.addListener(async (cmd) => {
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+    if (!tab?.id) return;
+    const p = detectPlatform(tab?.url);
+    if (cmd === "run-extract") {
+      if (!p) return;
+      const data = await chrome.storage.local.get(PREFS_KEY);
+      const includeReplies =
+        data[PREFS_KEY]?.includeReplies?.[p] ?? p === "facebook";
+      if (p === "facebook") await startFacebook(tab, { includeReplies });
+      else if (p === "tiktok") await startTikTok(tab, { includeReplies });
+      else await startInstagram(tab, { includeReplies });
+    } else if (cmd === "copy-names") {
+      try {
+        await chrome.tabs.sendMessage(tab.id, { type: "COPY_FROM_PAGE" });
+      } catch (e) {
+        console.debug("[ReSo] shortcut copy:", e?.message);
+      }
+    }
+  } catch (e) {
+    console.debug("[ReSo] command:", e?.message);
+  }
+});

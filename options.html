@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ReSo Ekstention — Pengaturan</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <img class="logo" src="logo.svg" alt="ReSo" />
+        <div>
+          <h1>ReSo Ekstention</h1>
+          <p class="sub">Pengaturan — default sertakan balasan & tampilan</p>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <!-- Sertakan balasan per platform -->
+      <section class="card" aria-labelledby="repliesTitle">
+        <h2 id="repliesTitle">Default "Sertakan balasan"</h2>
+        <p class="desc">
+          Nilai awal kotak "sertakan balasan (reply)" tiap platform — dipakai saat
+          memulai proses dari popup, panel halaman, shortcut, dan menu klik kanan.
+        </p>
+
+        <label class="row">
+          <span class="row-label">📘 Facebook</span>
+          <span class="switch">
+            <input id="optFb" type="checkbox" />
+            <span class="slider" aria-hidden="true"></span>
+          </span>
+        </label>
+
+        <label class="row">
+          <span class="row-label">🎵 TikTok</span>
+          <span class="switch">
+            <input id="optTt" type="checkbox" />
+            <span class="slider" aria-hidden="true"></span>
+          </span>
+        </label>
+
+        <label class="row">
+          <span class="row-label">📸 Instagram</span>
+          <span class="switch">
+            <input id="optIg" type="checkbox" />
+            <span class="slider" aria-hidden="true"></span>
+          </span>
+        </label>
+      </section>
+
+      <!-- Tema -->
+      <section class="card" aria-labelledby="themeTitle">
+        <h2 id="themeTitle">Tema</h2>
+        <p class="desc">
+          Tampilan popup, panel di halaman, dan halaman ini. "Sistem" mengikuti
+          pengaturan terang/gelap perangkat.
+        </p>
+        <div class="segmented" role="radiogroup" aria-label="Pilih tema">
+          <label class="seg">
+            <input type="radio" name="theme" value="system" />
+            <span>🖥️ Sistem</span>
+          </label>
+          <label class="seg">
+            <input type="radio" name="theme" value="light" />
+            <span>☀️ Terang</span>
+          </label>
+          <label class="seg">
+            <input type="radio" name="theme" value="dark" />
+            <span>🌙 Gelap</span>
+          </label>
+        </div>
+      </section>
+
+      <footer class="foot">
+        <button id="btnRestore" class="btn ghost" type="button">Pulihkan default</button>
+        <span id="toast" class="toast" role="status" aria-live="polite"></span>
+      </footer>
+    </main>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

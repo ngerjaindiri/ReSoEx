@@ -1,0 +1,15 @@
+{
+  "name": "reso-ekstention",
+  "version": "1.0.25",
+  "private": true,
+  "description": "Ekstensi Chrome (Manifest V3) untuk mengekstrak nama komentator dari Facebook, TikTok & Instagram lalu menyalinnya ke Excel.",
+  "type": "module",
+  "scripts": {
+    "build": "rm -rf dist && mkdir -p dist && cp manifest.json background.js content-fb.js content-fb.css content-tiktok.js content-tiktok.css content-ig.js content-ig.css inject-fb.js inject-tiktok.js inject-ig.js popup.html popup.css popup.js options.html options.css options.js shared.js logo.svg dist/ && cp -r icons dist/ && echo Build OK: dist/",
+    "check": "node --check shared.js && node --check background.js && node --check popup.js && node --check options.js && node --check content-fb.js && node --check content-tiktok.js && node --check content-ig.js && node --check inject-fb.js && node --check inject-tiktok.js && node --check inject-ig.js && echo Syntax OK",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

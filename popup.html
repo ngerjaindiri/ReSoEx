@@ -9,11 +9,12 @@
   <body>
     <header class="head">
       <div class="brand">
-        <img class="logo" id="logoIcon" src="logo.svg" alt="ReSo" />
+        <img class="logo" src="logo.svg" alt="ReSo" />
         <div>
           <h1 id="headerTitle">ReSo Ekstention</h1>
           <p class="sub" id="headerSub">Nama komentator → copy ke Excel</p>
         </div>
+        <button id="btnOptions" class="icon-btn" type="button" title="Pengaturan" aria-label="Buka pengaturan">⚙</button>
       </div>
     </header>
 
@@ -22,7 +23,7 @@
       <div id="platformBadge" class="platform-badge">Mendeteksi platform…</div>
 
       <section class="card">
-        <div id="status" class="status">Memuat…</div>
+        <div id="status" class="status" aria-live="polite">Memuat…</div>
         <div id="hint" class="hint"></div>
         <!-- TikTok-only: API badge -->
         <div id="apiBadge" class="api-badge" hidden>API: …</div>
@@ -35,17 +36,30 @@
         Sertakan balasan (reply)
       </label>
 
+      <section class="tools">
+        <input id="searchInput" class="search" type="search" placeholder="Cari nama…" aria-label="Cari nama" />
+        <button id="btnSort" class="btn" type="button" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+      </section>
+
       <section class="actions">
-        <button id="btnProcess" class="btn primary" type="button">Proses</button>
-        <button id="btnStop" class="btn" type="button" hidden>Stop</button>
-        <button id="btnCopy" class="btn success" type="button" disabled>Copy nama</button>
-        <button id="btnReset" class="btn ghost" type="button">Reset</button>
+        <button id="btnProcess" class="btn primary" type="button" title="Mulai ambil nama">Proses</button>
+        <button id="btnStop" class="btn" type="button" hidden title="Hentikan">Stop</button>
+        <button id="btnCopy" class="btn success" type="button" disabled title="Salin ke clipboard">Copy nama</button>
+        <button id="btnReset" class="btn ghost" type="button" title="Bersihkan hasil & reset">Reset</button>
+      </section>
+
+      <section class="actions export">
+        <button id="btnCsv" class="btn" type="button" disabled title="Simpan nama ke file CSV (siap Excel)">Ekspor CSV</button>
+        <button id="btnMerge" class="btn" type="button" title="Gabungkan nama unik Facebook + TikTok + Instagram lalu salin">Gabung Semua</button>
+        <button id="btnBackup" class="btn" type="button" title="Simpan hasil & pengaturan ke file JSON">Backup</button>
+        <button id="btnRestore" class="btn" type="button" title="Pulihkan hasil dari file backup JSON">Pulihkan</button>
+        <input id="fileRestore" type="file" accept="application/json,.json" hidden />
       </section>
 
       <!-- Facebook steps -->
       <ol id="stepsFb" class="steps" hidden>
         <li>Buka <b>1 postingan</b> (permalink), jangan home feed.</li>
-        <li>Pastikan komentar terlihat, lalu <b>Proses</b>.</li>
+        <li>Pastikan komentar terlihat &amp; badge <b>API siap</b>, lalu <b>Proses</b>.</li>
         <li>Tunggu selesai / partial, lalu <b>Copy nama</b>.</li>
         <li>Paste di Excel — 1 nama per baris ke bawah.</li>
       </ol>
@@ -58,9 +72,17 @@
         <li><b>Copy nama</b> → paste Excel (1 baris ke bawah).</li>
       </ol>
 
+      <!-- Instagram steps -->
+      <ol id="stepsIg" class="steps" hidden>
+        <li>Login Instagram dulu di browser ini (<b>wajib</b>).</li>
+        <li>Buka <b>1 post/reel</b> (URL <code>/p/…</code> atau <code>/reel/…</code>).</li>
+        <li>Klik ikon <b>komentar</b> sampai list muncul (badge <b>API siap</b>).</li>
+        <li><b>Proses</b> → <b>Copy username</b> → paste Excel (1 baris ke bawah).</li>
+      </ol>
+
       <!-- Unknown platform -->
       <div id="noSupport" class="steps" hidden>
-        <p>⚠️ Buka tab <b>Facebook</b> atau <b>TikTok</b> untuk mulai.</p>
+        <p>⚠️ Buka tab <b>Facebook</b>, <b>TikTok</b>, atau <b>Instagram</b> untuk mulai.</p>
       </div>
     </main>
 

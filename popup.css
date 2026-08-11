@@ -1,33 +1,84 @@
+/* ===== ReSo Design System — Popup ===== */
 :root {
   color-scheme: light dark;
-  --bg: #f0f2f5;
-  --card: #ffffff;
-  --text: #1c1e21;
-  --muted: #65676b;
-  --accent: #6366f1;
-  --accent2: #42b72a;
-  --line: #dddfe2;
+  --rs-bg: #f0f2f5;
+  --rs-card: #ffffff;
+  --rs-text: #1c1e21;
+  --rs-muted: #65676b;
+  --rs-line: #dddfe2;
+  --rs-accent: #6366f1;
+  --rs-accent-strong: #4f46e5;
+  --rs-accent-2: #42b72a;
+  --rs-on-accent-2: #ffffff;
+  --rs-danger: #e41e3f;
+  --rs-warn-bg: #fff4e5;
+  --rs-warn-text: #9a5b00;
+  --rs-ok-bg: #e8f8ef;
+  --rs-ok-text: #0a7a3e;
+  --rs-font: "Segoe UI", system-ui, -apple-system, sans-serif;
+  --rs-radius: 12px;
+  --rs-radius-sm: 8px;
+  --rs-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+  /* Soft motion tokens */
+  --rs-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --rs-ease-2: cubic-bezier(0.4, 0, 0.2, 1);
+  --rs-dur-fast: 140ms;
+  --rs-dur: 220ms;
+  --rs-dur-slow: 320ms;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #18191a;
-    --card: #242526;
-    --text: #e4e6eb;
-    --muted: #b0b3b8;
-    --line: #3a3b3c;
+    --rs-bg: #18191a;
+    --rs-card: #242526;
+    --rs-text: #e4e6eb;
+    --rs-muted: #b0b3b8;
+    --rs-line: #3a3b3c;
+    --rs-shadow: 0 8px 28px rgba(0, 0, 0, 0.45),
+      0 0 0 1px rgba(255, 255, 255, 0.06);
   }
 }
 
-/* ---- Platform-specific accent colors ---- */
+/* Theme override (chosen in Options) — beats the media query above */
+body[data-theme="dark"] {
+  color-scheme: dark;
+  --rs-bg: #18191a;
+  --rs-card: #242526;
+  --rs-text: #e4e6eb;
+  --rs-muted: #b0b3b8;
+  --rs-line: #3a3b3c;
+  --rs-shadow: 0 8px 28px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+body[data-theme="light"] {
+  color-scheme: light;
+  --rs-bg: #f0f2f5;
+  --rs-card: #ffffff;
+  --rs-text: #1c1e21;
+  --rs-muted: #65676b;
+  --rs-line: #dddfe2;
+  --rs-shadow: 0 8px 28px rgba(0, 0, 0, 0.18), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+/* Platform accents */
 body[data-platform="facebook"] {
-  --accent: #1877f2;
-  --accent2: #42b72a;
+  --rs-accent: #1877f2;
+  --rs-accent-strong: #0a5fd4;
+  --rs-accent-2: #42b72a;
 }
 
 body[data-platform="tiktok"] {
-  --accent: #fe2c55;
-  --accent2: #20d5ec;
+  --rs-accent: #fe2c55;
+  --rs-accent-strong: #d61f42;
+  --rs-accent-2: #20d5ec;
+  --rs-on-accent-2: #00261f;
+}
+
+body[data-platform="instagram"] {
+  --rs-accent: #e1306c;
+  --rs-accent-strong: #833ab4;
+  --rs-accent-2: #20d5ec;
+  --rs-on-accent-2: #00261f;
 }
 
 * {
@@ -37,23 +88,51 @@ body[data-platform="tiktok"] {
 body {
   margin: 0;
   width: 330px;
-  font: 13px/1.4 "Segoe UI", system-ui, -apple-system, sans-serif;
-  background: var(--bg);
-  color: var(--text);
+  font: 13px/1.4 var(--rs-font);
+  background: var(--rs-bg);
+  color: var(--rs-text);
+}
+
+button {
+  font-family: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--rs-accent);
+  outline-offset: 2px;
 }
 
 /* ---- Header ---- */
 .head {
-  padding: 12px 14px;
-  background: var(--accent);
+  padding: 14px 14px 13px;
+  background: linear-gradient(135deg, var(--rs-accent) 0%, var(--rs-accent-strong) 100%);
   color: #fff;
-  transition: background 0.3s ease;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 .brand {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+.icon-btn {
+  margin-left: auto;
+  border: none;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: rotate(30deg);
 }
 
 .logo {
@@ -85,7 +164,7 @@ h1 {
   font-weight: 700;
   padding: 4px 10px;
   border-radius: 999px;
-  background: var(--accent);
+  background: var(--rs-accent);
   color: #fff;
   letter-spacing: 0.3px;
   transition: background 0.3s ease;
@@ -97,14 +176,14 @@ main {
 }
 
 .card {
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  background: var(--rs-card);
+  border: 1px solid var(--rs-line);
+  border-radius: var(--rs-radius);
   padding: 12px;
 }
 
 .status {
-  color: var(--muted);
+  color: var(--rs-muted);
   min-height: 36px;
   font-size: 12px;
 }
@@ -112,7 +191,7 @@ main {
 .hint {
   margin-top: 4px;
   font-size: 11px;
-  color: var(--muted);
+  color: var(--rs-muted);
   word-break: break-all;
 }
 
@@ -122,22 +201,22 @@ main {
   margin-top: 8px;
   font-size: 10px;
   font-weight: 700;
-  padding: 4px 8px;
+  padding: 4px 10px;
   border-radius: 999px;
-  background: #fff4e5;
-  color: #9a5b00;
+  background: var(--rs-warn-bg);
+  color: var(--rs-warn-text);
 }
 
 .api-badge.ok {
-  background: #e8f8ef;
-  color: #0a7a3e;
+  background: var(--rs-ok-bg);
+  color: var(--rs-ok-text);
 }
 
 .count {
   margin-top: 8px;
   font-size: 22px;
-  font-weight: 750;
-  color: var(--accent);
+  font-weight: 800;
+  color: var(--rs-accent);
   transition: color 0.3s ease;
 }
 
@@ -147,22 +226,27 @@ main {
   gap: 8px;
   margin-top: 10px;
   font-size: 12px;
-  color: var(--muted);
+  color: var(--rs-muted);
   cursor: pointer;
   user-select: none;
 }
 
-/* Status-based count color */
+.check input {
+  accent-color: var(--rs-accent);
+  margin: 0;
+}
+
+/* Status-based colors */
 body[data-status="partial"] .count {
   color: #f7b928;
 }
 
 body[data-status="error"] .status {
-  color: #e41e3f;
+  color: var(--rs-danger);
 }
 
 body[data-status="done"] .count {
-  color: var(--accent2);
+  color: var(--rs-accent-2);
 }
 
 /* ---- Preview ---- */
@@ -171,9 +255,9 @@ body[data-status="done"] .count {
   max-height: 120px;
   overflow: auto;
   padding: 8px;
-  border-radius: 8px;
-  background: var(--bg);
-  border: 1px solid var(--line);
+  border-radius: var(--rs-radius-sm);
+  background: var(--rs-bg);
+  border: 1px solid var(--rs-line);
   font-size: 11px;
   white-space: pre-wrap;
 }
@@ -186,16 +270,27 @@ body[data-status="done"] .count {
   margin-top: 12px;
 }
 
+.actions.export {
+  margin-top: 8px;
+}
+
+.actions.export .btn {
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
 .btn {
-  border: 1px solid var(--line);
-  background: var(--card);
-  color: var(--text);
+  border: 1px solid var(--rs-line);
+  background: var(--rs-card);
+  color: var(--rs-text);
   border-radius: 10px;
   padding: 10px 12px;
   font-weight: 650;
   font-size: 12px;
   cursor: pointer;
-  transition: background 0.2s ease, border-color 0.2s ease;
+  user-select: none;
+  transition: background 0.2s ease, border-color 0.2s ease,
+    transform 0.08s ease, box-shadow 0.2s ease;
 }
 
 .btn:disabled {
@@ -204,39 +299,227 @@ body[data-status="done"] .count {
 }
 
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--rs-accent);
+  border-color: var(--rs-accent);
   color: #fff;
   grid-column: 1 / -1;
 }
 
 .btn.success {
-  background: var(--accent2);
-  border-color: var(--accent2);
-  color: #fff;
+  background: var(--rs-accent-2);
+  border-color: var(--rs-accent-2);
+  color: var(--rs-on-accent-2);
   grid-column: 1 / -1;
-}
-
-body[data-platform="tiktok"] .btn.success {
-  color: #000;
 }
 
 .btn.ghost {
   background: transparent;
 }
 
+.btn.ghost:hover {
+  background: var(--rs-bg);
+}
+
+/* ---- Tools (search + sort) ---- */
+.tools {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.tools .search {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--rs-line);
+  background: var(--rs-card);
+  color: var(--rs-text);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+}
+
+.tools .search::placeholder {
+  color: var(--rs-muted);
+}
+
+.tools .search:focus {
+  outline: 2px solid var(--rs-accent);
+  outline-offset: 1px;
+}
+
+.tools .btn {
+  padding: 8px 10px;
+  font-size: 11px;
+}
+
 /* ---- Steps ---- */
 .steps {
   margin: 14px 0 4px;
   padding-left: 18px;
-  color: var(--muted);
+  color: var(--rs-muted);
   font-size: 11px;
 }
 
 .steps b {
-  color: var(--text);
+  color: var(--rs-text);
 }
 
 .steps code {
   font-size: 10px;
+}
+
+/* ---- Modern polish: micro-interactions & running feedback ---- */
+.btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.985);
+}
+
+.btn.primary:not(:disabled):hover,
+.btn.success:not(:disabled):hover {
+  filter: brightness(1.08);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.16);
+}
+
+body[data-status="running"] #btnProcess {
+  background-image: linear-gradient(
+    110deg,
+    transparent 35%,
+    rgba(255, 255, 255, 0.28) 50%,
+    transparent 65%
+  );
+  background-size: 220% 100%;
+  animation: rs-shimmer 1.3s linear infinite;
+}
+
+body[data-status="running"] .count {
+  animation: rs-breathe 1.5s ease-in-out infinite;
+}
+
+body[data-status="running"] .status::before {
+  content: "";
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--rs-accent);
+  animation: rs-blink 0.9s ease-in-out infinite;
+}
+
+@keyframes rs-shimmer {
+  from {
+    background-position: 120% 0;
+  }
+  to {
+    background-position: -120% 0;
+  }
+}
+
+@keyframes rs-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes rs-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ===== Soft Motion System (v1.0.22) =====
+   Easing & durasi seragam: ease-out lembut untuk masuk/hover, ease-2 untuk
+   perubahan state, press singkat untuk umpan balik tekan. */
+body {
+  transition: background var(--rs-dur-slow) var(--rs-ease),
+    color var(--rs-dur-slow) var(--rs-ease);
+}
+
+.icon-btn {
+  transition: background var(--rs-dur) var(--rs-ease-2),
+    transform var(--rs-dur) var(--rs-ease);
+}
+
+.platform-badge {
+  transition: background var(--rs-dur-slow) var(--rs-ease),
+    transform var(--rs-dur) var(--rs-ease);
+}
+
+.platform-badge:hover {
+  transform: translateY(-1px);
+}
+
+.api-badge {
+  transition: background var(--rs-dur) var(--rs-ease-2),
+    color var(--rs-dur) var(--rs-ease-2);
+}
+
+.status {
+  transition: color var(--rs-dur) var(--rs-ease-2);
+}
+
+.count {
+  transition: color var(--rs-dur-slow) var(--rs-ease-2);
+}
+
+.btn {
+  transition: background var(--rs-dur) var(--rs-ease-2),
+    border-color var(--rs-dur) var(--rs-ease-2),
+    box-shadow var(--rs-dur) var(--rs-ease-2),
+    transform var(--rs-dur-fast) var(--rs-ease-2);
+}
+
+.btn:not(:disabled):active {
+  transform: translateY(1px) scale(0.97);
+}
+
+.tools .search {
+  transition: border-color var(--rs-dur) var(--rs-ease-2);
+}
+
+.preview {
+  animation: rs-fade var(--rs-dur-slow) var(--rs-ease);
+}
+
+.steps {
+  animation: rs-fade-up var(--rs-dur-slow) var(--rs-ease);
+}
+
+@keyframes rs-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rs-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---- Aksesibilitas: hormati pengaturan animasi sistem ---- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

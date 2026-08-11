@@ -1,0 +1,225 @@
+# Changelog
+
+Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
+
+## [1.0.25] — 2026-08-11
+
+### Chore & dokumentasi
+- **Hapus `icons/logo.svg`** — duplikat byte-identik dari `logo.svg` di root (satu-satunya yang direferensikan popup/options).
+- **Hapus `id="logoIcon"`** yang tidak dipakai di popup.html.
+- **README diperbarui** — struktur proyek (blok marker `NORMALIZE`/`DONEMSG`, fixture parity, `doneMessage` satu sumber pesan).
+
+### Eksekusi audit detail UI/UX (bug CSV, merge lintas platform, jargon, keyboard)
+- **🐛 Fix "Ekspor CSV" ReferenceError** — `wordFor(p)` dengan `p` tidak terdefinisi di handler `btnCsv` (popup.js) → toast konfirmasi gagal + unhandled rejection di setiap klik. Kini `wordFor(res?.platform || currentPlatform)`.
+- **🐛 Fix "Gabung Semua" kehilangan data** — helper baru **`mergeAcrossPlatforms`** di shared.js: tiap nama dinormalisasi dengan aturan **platform-nya sendiri** (sebelumnya `mergeNames(..., null)` menerapkan aturan FB ke TT/IG → `@user123` & emoji TikTok ter-drop; pemanggilan bertahap pun menormalkan ulang hasil lama → nama FB "Andi Pratama" hilang). Terverifikasi runtime: 6 nama → kini 6; + 3 unit test.
+- **Jargon disembunyikan saat run selesai** — hint "Target: graphql", "Target: templates:2 buffer:5", "Video: 7290…", "Target: 1234…" (media id) kini **kosong di status done/partial/stopped/error** (popup + 3 panel); baris status sudah menjelaskan hasil. Detail teknis tetap tampil saat running (transien, berguna untuk debug).
+- **Esc menutup panel** — ketiga panel (FB/TikTok/IG) kini punya jalur keyboard: Esc = setara tombol min (FB juga menghormati flag userCollapsed).
+- **Popup: satu sumber render** — poll cadangan 1,2 dtk dihapus; `storage.session.onChanged` sudah memicu pada setiap `setState` background (diverifikasi: semua state lewat `chrome.storage.session.set`).
+- **Count "X dari N" saat filter aktif** — popup menampilkan "0 dari 1500 nama" (mis. filter tanpa match) agar tombol Copy yang nonaktif tidak ambigu.
+- **FAB title/aria dinamis** — FAB ketiga platform kini update title/aria mengikuti state ("Proses berjalan — buka panel untuk Stop", "Buka panel — N nama/username terkumpul"), seragam dengan chip bar Like FB.
+
+## [1.0.24] — 2026-08-11
+
+### Satu sumber pesan akhir run — `doneMessage` (dari audit D1)
+- **`doneMessage(reason, count, platform, { extra, tip })` di shared.js** menjadi **single source of truth** untuk semua pesan akhir run: `reasonToMessage` (popup/background) kini **delegasi** ke helper yang sama, dan ketiga panel (`content-fb/tiktok/ig.js`) memakai salinan byte-identik di dalam marker `BEGIN-RESO-DONEMSG` — dijamin **fixture test parity** (4 salinan) agar tidak pernah drift lagi.
+- **Drift yang tertutup**: ① FB panel menyisipkan suffix `[graphql]`/`[dom]` (TT/IG tidak) → dihapus, mode tetap terlihat di baris "Target:"; ② IG panel checkpoint **tanpa jumlah** → kini menyertakan count; ③ TT/IG timeout tanpa "Klik Copy" → seragam; ④ IG panel rate-limit memakai wording sendiri → kini helper tunggal ("Rate limit Instagram (429)…" konsisten dengan popup).
+- **`wordFor(platform)`** diekspor dari shared (username untuk IG, nama lainnya) — popup memakainya, salinan lokal dihapus.
+- Jalur stop-finalize (content menghentikan run saat inject tak menjawab) ikut diarahkan ke `doneMessage("stopped", …)`.
+- Tes: fixture DONEMSG (layout 4+1+2, parity 6+4, kontrak wording platform-aware) + unit test delegasi `reasonToMessage` ≡ `doneMessage` di semua reason/platform.
+
+## [1.0.23] — 2026-08-11
+
+### Default visibility panel FB — expanded saat ada hasil (sama dengan TikTok/Instagram)
+- **Boot**: panel Facebook kini memanggil `GET_STATE`; jika ada hasil tersimpan lintas reload, nama dipulihkan ke panel dan panel **langsung terbuka** (sebelumnya selalu collapsed).
+- **Run selesai dengan hasil** (termasuk dari popup/shortcut/context-menu): panel otomatis terbuka menampilkan hasil — konsisten dengan TT/IG yang selalu expanded.
+- **Toggle manual tetap dihormati**: user yang menutup panel (`min`) tidak akan dipaksa terbuka saat run selesai; FAB/ikon bar Like membuka dan me-reset preferensi.
+- **Tanpa hasil**: panel tetap collapsed di feed (tidak mengganggu), FAB adalah pintu seragam.
+
+## [1.0.22] — 2026-08-11
+
+### Soft motion — audit & sistem gerak seragam
+- **Token motion di 5 stylesheet** — `--rs-ease`, `--rs-ease-soft`, `--rs-dur-fast/-base/-slow`, `--rs-motion: cubic-bezier(.22,.61,.36,1)`; semua transisi memakai easing konsisten (bukan `ease` generik dengan durasi acak 0.08–0.3s).
+- **Semua permukaan kini bergerak lembut**: popup, options, dan panel FB/TikTok/IG — icon button, badge platform/API, status chip, count, tombol, preview, steps, cards, switch, toast, collapse panel, FAB badge pop.
+- **Collapse panel kini visibility-based + transisi** — buka/tutup panel FB tidak lagi abrupt (fade+slight rise 0.3s, `visibility` di-delay agar tombol tidak mengganggu klik).
+- **Count/badge/status kini bertransisi** — angka naik lembut (0.15s), badge muncul dengan pop ringan, status berubah warna smooth.
+- **`prefers-reduced-motion` dipertahankan** dari v1.0.20 — semua gerak baru ikut dimatikan untuk user yang memilih reduced motion (di halaman host tetap di-scope ke `#xxx-root`).
+- Audit motion lengkap tersimpan di `RESEARCH.md` seksi 9 (inventaris + inkonsistensi sebelum fix).
+
+## [1.0.21] — 2026-08-11
+
+### Badge API Instagram selalu akurat
+- **`GET_STATE` kini merekomputasi `hasTemplate` untuk Instagram** — simetris dengan TikTok: badge "API komentar: siap" di popup dihitung ulang dari session template (TTL 30 mnt + validasi shape) setiap kali state diambil, bukan hanya mengandalkan nilai session yang terakhir di-`setState`. Menutup kondisi edge saat service worker baru bangun / state belum di-refresh.
+
+## [1.0.20] — 2026-08-11
+
+### Konsistensi UI/UX — quick wins (kritik audit)
+- **Satu model interaksi entry point** — ikon N di bar Like/Comment/Share Facebook kini **membuka panel** (menandai post tempat ikon berada agar engine menyasar post yang benar), bukan langsung proses/copy — seragam dengan FAB di ketiga platform. Tombol FAB tetap pintu utama; status visual chip (badge jumlah, pulse, warna done) dipertahankan.
+- **Kopi segar** — hint FB menyebut FAB; steps popup FB menyebut badge "API siap"; pesan gagal copy kini "Coba lagi dari panel atau popup" (bukan "ikon extension" yang basi).
+- **Aksesibilitas: `prefers-reduced-motion`** — semua animasi (shimmer/breathe/blink/pulse/rise) dihormati di 5 stylesheet; di halaman host, scope dibatasi ke panel agar tidak mengganggu animasi Facebook/TikTok/Instagram.
+- **Terminologi seragam** — checkbox FB kini "Sertakan balasan (reply)"; sub-header popup "copy ke Excel" untuk semua platform; placeholder & aria search "Cari username…" untuk IG; nama file CSV `reso-username-*.csv` untuk IG; warna badge FAB IG disamakan (#161823).
+
+## [1.0.19] — 2026-08-11
+
+### Badge "API komentar" di panel & popup Facebook
+- **Badge API di panel Facebook** — konsisten dengan TikTok & Instagram: di halaman post permalink badge hijau "API komentar: siap" (engine FB selalu bisa paginate via synthetic GraphQL template dari `feedbackId` di URL); di home feed/URL lain badge kuning "belum — buka permalink post".
+- **Badge API di popup Facebook** — sama seperti panel (konsisten lintas permukaan).
+- Helper baru `isFacebookPostPage` (shared, ter-uji) — cermin logika `feedbackIdFromUrl` engine.
+
+## [1.0.18] — 2026-08-11
+
+### Audit P2 — getDtsg ringan, pre-check login TikTok, satu model interaksi panel
+- **`getDtsg`/`getLsd` ringan** — token anti-forgery FB kini diambil dari `require("DTSGInitialData")`/modul memory dulu, lalu scan `<script>` tag terbatas (lewati payload raksasa >400 KB), lalu input form; `document.documentElement.innerHTML` (serialisasi DOM megabyte) hanya jadi fallback terakhir dan tetap di-cache 5 menit.
+- **Pre-check login TikTok** — pola IG (`CHECK_TT_LOGIN`): tanpa cookie `sessionid` di tiktok.com, Proses gagal cepat dengan pesan "Sesi TikTok tidak aktif — login di tiktok.com lalu Proses lagi", di jalur panel maupun popup/shortcut/context-menu — tidak lagi membuang run & request saat logout.
+- **FAB di Facebook** — model interaksi panel kini seragam di ketiga platform: ikon FAB pojok kanan-bawah (buka panel), badge jumlah, pulse saat running, warna done saat ada hasil. Chip inline di bar Like/Comment/Share tetap dipertahankan sebagai integrasi native FB (klik = proses, klik lagi = copy). Glyph tombol tutup diseragamkan (`–`).
+
+## [1.0.17] — 2026-08-11
+
+### Audit menyeluruh — daya tahan & konsistensi UI/UX (fix terverifikasi)
+- **Guard template IG mid-run** — webRequest capture Instagram kini tidak lagi menimpa template media yang sedang diproses saat run aktif (pola guard TikTok): scroll ke post/reel lain tidak mengganggu pagination, dan template untuk run berikutnya tetap menyasar post yang benar.
+- **Total request budget di Facebook** — engine FB kini punya `requestBudget` 350/run (sebelumnya hanya guard halaman 120 + budget balasan): konsisten dengan TikTok (350) dan Instagram (150); README "batas request per run" kini benar untuk semua platform.
+- **Label popup platform-aware** — popup kini memakai "username" untuk Instagram (count, tombol Copy, toast, header CSV) — sebelumnya selalu "nama" meski panel IG dan menu sudah bilang username.
+- **Hint popup menyebut Instagram** — "Buka tab Facebook, TikTok, atau Instagram…" (sebelumnya lupa menyebut Instagram).
+- **Wording rate-limit konsisten** — pesan `rate_limit` non-FB kini "X nama" (TikTok) / "X username" (Instagram), bukan kata generik "data".
+- **Konstanta storage di popup** — listener `storage.onChanged` memakai `STORAGE_KEY_*` dari shared (bukan string hardcode `fnk_state`/`tnk_state`/`ing_state`).
+
+> ℹ️ Koreksi audit: temuan "TT XHR tidak difilter video" ternyata **false positive** — kedua jalur (fetch & XHR) sama-sama melalui `tryParseResponse` yang memanggil `payloadMatchesVideo`; tidak ada perbaikan yang diperlukan.
+
+## [1.0.16] — 2026-08-11
+
+### Perbaikan audit IG (P2)
+- **Pesan 403 akurat** — HTTP 403 tidak lagi diklaim sebagai "login diperlukan"; kini diklasifikasikan sebagai blok anti-bot/App-ID ditolak (`stopReason: "blocked"`): run berhenti aman, status *partial* (jika ada hasil) / *error* (jika kosong), dengan diagnosis eksplisit di panel & popup. HTTP 302/401 tetap = login.
+- **Fallback endpoint balasan `child_comments/`** — bila endpoint `inline_child_comments/` menjawab 404 / "not found" (versi klien IG berbeda-beda), engine otomatis mencoba `child_comments/` sekali per thread sebelum menyerah.
+- **Pre-check `no_media`** — di halaman profil/feed (tanpa shortcode `/p/` atau `/reel/`), Proses kini gagal cepat dengan pesan "Buka halaman post/reel dulu" (pola `no_video` TikTok), di panel maupun jalur popup/shortcut — tidak lagi membuang 45 dtk dalam mode scroll.
+- **Header `X-IG-WWW-Claim: 0`** — dikirim pada request replay (sama seperti web IG asli) untuk menstabilkan 403 sesekali akibat App-ID/claim tidak cocok.
+- **Cooldown antar-run** — Proses diblokir sementara setelah run selesai (15 dtk; 60 dtk setelah rate limit) dengan pesan hitung mundur, mencegah run beruntun yang menjadi pemicu rate-limit/checkpoint (riset IG 2026).
+
+## [1.0.15] — 2026-08-11
+
+### Perbaikan audit IG (P1)
+- **Replay tidak lagi menyasar post yang salah** — `buildUrl` kini menulis ulang segmen `media_id` di path API sesuai post yang sedang dibuka (pola `aweme_id` TikTok), dan `activeMediaId` diprioritaskan dari halaman (bukan dari template lama). Sebelumnya, template dari post lain (masih valid dalam TTL 30 mnt) membuat engine mengambil komentar post yang salah bila user tidak membuka komentar dulu.
+- **Budget balasan benar-benar per-run** — counter `replyRequests` dipindah ke luar loop halaman: maksimal 40 request balasan per run (sebelumnya 40 per halaman, di-reset tiap halaman; cap nyata hanya budget global 150).
+- **`rate_limit` jadi `stopReason` resmi** (konsisten dengan FB/TT) — engine mengirim `stopReason: "rate_limit"` alih-alih `timeout`+postHint; panel kini menampilkan status *partial* (jika ada hasil) / *error* (jika kosong) dan pesan "Rate limit Instagram (429)" spesifik (sebelumnya dengan hasil bisa salah jadi hijau "done").
+- **`PleaseWaitFewMinutes` / `FeedbackRequired` diklasifikasikan** — `status:"fail"` dengan pesan "please wait a few minutes" / "feedback_required" kini diperlakukan sebagai rate limit/akun dibatasi: run berhenti aman dengan diagnosis jelas (bukan error generik), tanpa retry loop yang membahayakan akun.
+- **Sleep interruptible di fase awal** — buka komentar (`tryOpenComments`), retry buka komentar, menunggu template, dan mode scroll kini memakai `sleepWhile` (cek Stop tiap 200 ms); FB/TT dan sisa IG sudah konsisten.
+
+## [1.0.14] — 2026-08-11
+
+### Ketahanan TikTok diperkuat
+- **Backoff adaptif saat HTTP 429** — replay API komentar tidak langsung menyerah: menunggu sesuai header `Retry-After` (atau eskalasi 8s → 16s), maksimal 2 retry, dan hanya jika sisa waktu run masih cukup. Heartbeat progress tetap terkirim selama menunggu, jadi panel tidak terlihat beku.
+- **Deteksi sesi tidak aktif** — respons HTTP 401 dari API komentar TikTok kini dianggap sesi kadaluarsa: run berhenti aman dengan pesan "Sesi TikTok tidak aktif…" di panel & popup (sebelumnya error generik).
+- **Error jaringan ditangani** — blip jaringan (fetch gagal, tab di-throttle) di-retry sekali cepat, tidak langsung mengakhiri run.
+- **Retry halaman kosong** — halaman kosong di tengah pagination (sementara `has_more` masih true) tidak lagi dinyatakan "complete": engine mencoba ulang cursor yang sama (2×) sebelum berhenti aman.
+- **Budget balasan terpisah** — replay balasan dibatasi **40 request/run** (sebelumnya 30 thread × 15 halaman tanpa batas = hingga ratusan request), dan error 429/sesi tidak aktif di balasan kini menghentikan seluruh run (sebelumnya di-swallow diam-diam — berisiko untuk akun).
+- **Sleep interruptible** — semua jeda (pagination, balasan, buka komentar, menunggu template, mode scroll) memeriksa tombol Stop tiap 200 ms, penghentian selalu responsif.
+- **Diagnosis dibawa ke UI** — `rate_limit`/`no_login` kini menjadi `stopReason` resmi di panel & popup: status *partial* (jika ada hasil) / *error* (jika kosong), pesan TikTok-specific via `reasonToMessage` (sebelumnya `no_login` selalu menampilkan pesan Instagram).
+
+### Pengujian
+- Unit test `reasonToMessage` untuk `rate_limit` dan `no_login` TikTok (platform-aware TT vs FB vs IG) ditambahkan.
+
+## [1.0.13] — 2026-08-10
+
+### Ketahanan Facebook diperkuat
+- **Backoff adaptif saat HTTP 429** — replay GraphQL tidak langsung menyerah: menunggu sesuai header `Retry-After` (atau eskalasi 8s → 16s), maksimal 2 retry, dan hanya jika sisa waktu run masih cukup. Heartbeat progress tetap terkirim selama menunggu, jadi panel tidak terlihat beku.
+- **Deteksi sesi tidak aktif** — jika Facebook redirect ke halaman login (sesi kadaluarsa / token kedaluwarsa) atau mengembalikan HTML login, run berhenti aman dengan pesan "Sesi Facebook tidak aktif…" alih-alih mengumpulkan sampah atau terus mencoba.
+- **Error jaringan ditangani** — blip jaringan (fetch gagal, tab di-throttle) di-retry sekali cepat, tidak langsung mengakhiri run.
+- **Retry halaman kosong** — respons kosong / JSON gagal diparse di tengah pagination tidak lagi dianggap "complete": engine mencoba ulang cursor yang sama (2×) sebelum menyatakan berhenti, dan halaman `has_next_page` tanpa cursor dihentikan dengan aman (anti loop tak berujung).
+- **Budget balasan terpisah** — replay balasan dibatasi 40 request/run (tidak lagi 25 thread × 8 halaman tanpa batas), dan error 429/sesi kadaluarsa di balasan kini menghentikan seluruh run (sebelumnya di-swallow diam-diam — berisiko untuk akun).
+- **Sleep interruptible** — semua jeda (pagination, balasan, DOM fallback, menunggu template) memeriksa tombol Stop tiap 200 ms, penghentian selalu responsif.
+- **Diagnosis dibawa ke UI** — `rate_limit`/`no_login` kini menjadi `stopReason` resmi: status *partial* (jika ada hasil) / *error* (jika kosong) di panel & popup, dengan pesan spesifik platform.
+
+### Pengujian
+- Unit test `reasonToMessage` untuk `rate_limit` (FB-specific + generic) dan `no_login` platform-aware (FB vs IG) ditambahkan.
+
+## [1.0.12] — 2026-08-10
+
+### Ketahanan Instagram diperkuat
+- **Backoff adaptif saat HTTP 429** — engine tidak langsung menyerah: menunggu sesuai header `Retry-After` (atau 8s → 16s), maksimal 2 retry, dan hanya jika sisa waktu run masih cukup. Heartbeat progress tetap terkirim selama menunggu, jadi panel tidak terlihat beku.
+- **Deteksi checkpoint & login gate** — `checkpoint_required`/`challenge_required` kini dibedakan dari sekadar login: run berhenti aman dengan status *partial* (jika ada hasil) dan pesan eksplisit "Instagram minta verifikasi (checkpoint)…" di panel & popup. Sebelumnya error ini salah diklasifikasikan sebagai "login"/"timeout" generik.
+- **Error jaringan ditangani** — blip jaringan (fetch gagal, tab di-throttle) di-retry sekali cepat, tidak langsung mengakhiri run.
+- **Retry halaman kosong** — IG kadang mengembalikan halaman kosong di tengah pagination sementara `has_more_comments` masih true; engine mencoba ulang cursor yang sama (2×) sebelum menyatakan selesai, dan berhenti aman bila `has_more` true tanpa cursor (menghindari loop tak berujung).
+- **Cursor `next_max_id` lebih toleran** — menerima angka/string; balasan memakai fallback `next_max_child_id`.
+- **Budget balasan terpisah** — replay balasan dibatasi 40 request/run (tidak lagi memakai jatah utama tanpa batas), dan error 429/login/checkpoint di balasan kini menghentikan run (sebelumnya di-swallow diam-diam — berisiko untuk akun).
+- **Buka komentar lebih andal** — selektor baru (`View all comments`, `Lihat semua komentar`, `aria-label*="view all"`) + fallback berbasis teks, sehingga template API lebih sering ter-capture tanpa klik manual.
+- **`maxMs` IG diseragamkan** — panel memakai 150 dtk (default shared), memberi ruang untuk backoff.
+- **Header `Referer`** ditambahkan ke replay API, menyamai perilaku web IG.
+- **Sleep interruptible** — semua jeda/backoff memeriksa tombol Stop (tiap 200 ms), penghentian selalu responsif.
+
+### Pengujian
+- Unit test `reasonToMessage("checkpoint", …)` + pemetaan status partial/error ditambahkan.
+
+## [1.0.11] — 2026-08-10
+
+### Diperbaiki (hasil audit dalam)
+- **Normalisasi nama single-source** — 7 salinan logika normalisasi (shared + engine FB/TikTok/IG + content FB/TikTok/IG) disatukan ke satu referensi (blok `BEGIN/END-RESO-NORMALIZE`) dan dijaga **fixture test paritas** (`npm test`): setiap salinan diverifikasi byte-identik + perilaku identik terhadap korpus fixture. Drift daftar kata terblokir TikTok (engine/content membiarkan "View", "See", "Write", "Log in" lolos padahal shared memblokirnya) sudah disamakan.
+- **`:has()` di halaman Options** — diganti kelas `.selected` yang di-set JS; sebelumnya manifest mengklaim dukungan Chrome 102 tapi tombol tema tidak menampilkan state terpilih di Chrome 102–104.
+- **Pesan error platform-aware** — `reasonToMessage("no_template")` kini memakai kata-kata sesuai platform (FB: permalink + GraphQL; IG: post/reel + wajib login), bukan lagi pesan TikTok untuk semua platform. Pesan hasil tersimpan juga memakai "username" untuk IG.
+- **Diagnosis rate limit (429) sampai ke user** — hint "Rate limit Instagram (429)…" dari engine tidak lagi dibuang: panel IG dan popup menampilkan pesan 429 spesifik (+ status parsial), bukan sekadar "Waktu habis".
+- **Pre-check login Instagram** — sebelum mulai, extension memeriksa cookie `sessionid` via `chrome.cookies` (izin `cookies` ditambahkan) dan langsung menampilkan "Butuh login Instagram" tanpa membuang waktu 45 detik di mode scroll. Berlaku di popup, panel, shortcut, dan menu klik kanan.
+- **Dead branch di engine Facebook** — `if ("id" in vars) vars.id = fbId; else vars.id = fbId;` diperbaiki menjadi `id` / `feedbackID` / `feedback_id` sesuai nama field yang dipakai template reply.
+- **Cache token anti-forgery Facebook** — `getDtsg()`/`getLsd()` tidak lagi serialisasi seluruh DOM Facebook (`document.documentElement.innerHTML`, megabyte) per halaman pagination; di-cache dengan TTL 5 menit.
+
+### Pengujian
+- `sanitizeEngineOptions` dipindah ke `shared.js` (pure, teruji) — test mencakup SET_TEMPLATE FB/TT/IG, clamping `maxMs`, sanitasi `awemeId`/`mediaId`, dan `includeReplies` per platform.
+- Total unit test naik menjadi **49** (`npm test`).
+
+## [1.0.10] — 2026-08-10
+
+### Ditambahkan
+- **Halaman Pengaturan (Options)** — `chrome://extensions` → Details → Extension options (atau tombol ⚙ di popup):
+  - **Default "Sertakan balasan" per platform** (Facebook / TikTok / Instagram) — dipakai sebagai nilai awal di popup, panel halaman, shortcut keyboard, dan menu klik kanan.
+  - **Tema** — Sistem / Terang / Gelap, diterapkan langsung ke popup, panel Facebook, panel TikTok, panel Instagram, dan halaman Options itu sendiri (dengan preview live).
+  - Auto-save setiap perubahan + tombol "Pulihkan default".
+
+## [1.0.9] — 2026-08-10
+
+### Ditambahkan
+- **Platform baru: Instagram — username komentator** (post & reel). Output berupa **username IG** (`user123`, tanpa `@`, huruf kecil), bukan nama tampilan.
+  - Replay endpoint private `api/v1/media/{media_id}/comments/` dengan cursor `max_id`/`next_max_id` (template di-capture via `webRequest`, TTL 30 menit).
+  - Auto-open komentar + intercept `fetch`/XHR + fallback DOM (dialog komentar).
+  - Proteksi akun: budget 150 request/run, delay acak besar, berhenti dini saat `429` atau `401/403` (login wajib → pesan jelas).
+  - UI peringatan "butuh login" di popup & panel; aksen gradien Instagram (pink→ungu) di popup, panel, dan FAB.
+- **Gabung Semua** (popup) — gabungkan nama unik Facebook + TikTok + Instagram.
+- Unit test Instagram: normalisasi username (lowercase, tanpa @, charset, whitespace), validasi template, deteksi platform, default state — total **33 test**.
+
+## [1.0.8] — 2026-08-10
+
+### Ditambahkan
+- **Badge jumlah nama di ikon ekstensi** — jumlah hasil terlihat langsung di toolbar (hijau saat selesai, kuning saat parsial, animasi saat berjalan), ikut platform tab aktif.
+- **Shortcut keyboard** — `Ctrl+Shift+E` untuk Proses/ambil nama, `Alt+Shift+C` untuk salin ke clipboard (bisa diubah di `chrome://extensions/shortcuts`).
+- **Menu klik kanan** — "Ambil nama komentator halaman ini" (di halaman FB/TikTok) dan "Buka & ambil nama dari tautan ini" (di link FB/TikTok): tab dibuka lalu ekstraksi berjalan otomatis.
+- **Backup & Pulihkan JSON** — simpan hasil + preferensi ke file, pulihkan kapan saja (tombol di popup).
+- **Filter & sortir nama di popup** — kotak cari nama + toggle urutkan A-Z; memengaruhi preview, Copy, dan Ekspor CSV.
+- **Auto-open komentar TikTok lebih andal** — selector lebih luas (`comment-icon`, `comment-count`, tombol berlabel), klik ulang dengan retry sampai panel komentar benar-benar terbuka, sehingga template API ter-capture tanpa perlu klik manual.
+
+### Diubah
+- **Deteksi navigasi SPA tanpa polling** — ganti `setInterval` 1,6 detik dengan `MutationObserver` + hook `history.pushState/replaceState` + `popstate/hashchange` (debounce 300 ms): lebih responsif dan lebih hemat CPU di halaman yang sibuk.
+
+## [1.0.7] — 2026-08-10
+
+### Diperbaiki
+- **Gabung FB+TT kini selalu lengkap** — `GET_ALL_STATE` memulihkan hasil tersimpan (`storage.local`) untuk kedua platform sebelum digabung, sehingga nama platform lain tidak hilang dari tombol "Gabung FB+TT" setelah browser restart.
+
+### Disempurnakan
+- **Desain lebih modern & hidup** — header gradien per platform, micro-interaction tombol (brightness saat hover, press saat klik), efek shimmer pada tombol Proses saat berjalan, denyut halus pada penghitung nama, indikator titik berkedip pada status *running*, dan animasi masuk panel di halaman Facebook/TikTok. Konsisten di popup, panel FB, dan panel TikTok (mode terang & gelap).
+
+## [1.0.6] — 2026-08-10
+
+### Ditambahkan
+- **Hasil tersimpan lintas sesi** — hasil terakhir per platform dan preferensi "sertakan balasan" disimpan di `chrome.storage.local`; tidak hilang saat browser ditutup. Reset menghapus hasil tersimpan.
+- **Ekspor CSV** — simpan hasil ke file `.csv` dengan BOM UTF-8 (siap dibuka Excel).
+- **Gabung Facebook + TikTok** — gabungkan nama unik dari kedua platform sekali klik, langsung tersalin ke clipboard.
+- **Unit test** — 24 test untuk `shared.js` (`npm test`, zero dependency).
+- `CHANGELOG.md`, `README.md`, `package.json` (script `build`/`check`/`test`), `.gitignore`.
+
+### Diperbaiki
+- **Facebook: tanpa perlu buka/scroll semua komentar** — replay GraphQL pagination otomatis: template pagination dipilih dengan verifikasi (`page_info`) dan, bila belum ada capture, query dibangun langsung dari ID postingan di URL; scroll fallback menyasar kontainer komentar, bukan seluruh halaman.
+- **UI/UX terpadu** — popup, panel Facebook, dan panel TikTok kini memakai satu design system (token `--rs-*`): komponen, radius, font, tombol, warna status, dan dark mode identik; panel halaman mendapat tombol Reset, `aria-live`, tooltip, dan warna status (done/partial/error) yang konsisten dengan popup.
+- Run tidak lagi menggantung saat tab yang sedang memproses ditutup (`tabs.onRemoved` → status di-finalisasi otomatis).
+- Berhenti dini saat Facebook membalas `HTTP 429` (rate limit) dan batas jumlah halaman/request per run (FB 120 halaman, TikTok 350 request) untuk melindungi akun.
+- Deteksi `feedback_id` untuk ekspansi balasan (kondisi regex sebelumnya selalu salah).
+- Logika normalisasi nama disinkronkan antar `shared.js`, `content-fb.js`, dan `inject-fb.js` (filter unicode + daftar kata terblokir identik).
+- Aksesibilitas: FAB TikTok kini punya `aria-label`/`title`.
+- Dead branch `fb_dtsg` di replay GraphQL dirapikan.
+
+## [1.0.5] — Sebelumnya
+Rilis awal: ekstraksi nama komentator Facebook (GraphQL + DOM) & TikTok (replay API + DOM), copy ke clipboard, deduplikasi, filter timestamp/UI.

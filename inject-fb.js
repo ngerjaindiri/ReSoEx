@@ -7,7 +7,7 @@
  */
 (function () {
   const SOURCE = "fb-nama-komentar-inject";
-  const VERSION = 6;
+  const VERSION = 8;
 
   if (window.__FNK_ENGINE__) {
     // Engine already live; ENGINE_CMD uses non-enumerable __RESO_FNK__
@@ -36,6 +36,9 @@
   let lastNewAt = Date.now();
   let includeReplies = true;
   let currentRunId = null;
+  /** Total GraphQL requests this run (budget guard — protect the user's account) */
+  let requestBudget = 0;
+  const REQUEST_BUDGET = 350;
   /** @type {Element | null} */
   let postRoot = null;
   let engineMode = "idle"; // graphql | hybrid | dom
@@ -49,14 +52,14 @@
   }
 
   // ---------------- names ----------------
-  function normalizeName(raw) {
+  // BEGIN-RESO-NORMALIZE
+  function normalizeCommentName(raw) {
     if (typeof raw !== "string") return "";
     let name = raw
       .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
       .replace(/\s+/g, " ")
       .trim();
     name = name.replace(/\s+[·•|].*$/, "").trim();
-    // 1) Indonesian non-numeric: "sehari yang lalu", "sekitar satu jam yang lalu"
     name = name.replace(
       /\s+(sekitar\s+)?(satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa)\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
       ""
@@ -69,28 +72,24 @@
       /\s+\d+\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
       ""
     );
-    // 2) English: "about 3 hours ago", "a minute ago", "just now"
     name = name.replace(
       /\s+(about\s+)?(a|an|\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago.*$/i,
       ""
     );
     name = name.replace(/\s+just\s+now.*$/i, "");
-    // 3) Generic numeric: "3d", "5h", "2 jam" (run LAST so specific patterns match first)
     name = name.replace(
       /\s+\d+\s*(d|h|m|w|y|jam|menit|hari|minggu|tahun|bulan|hr|min|detik|sec|second|minute|hour|day|week|month|year)s?\b.*$/i,
       ""
     );
     name = name.replace(/\s+Edited$/i, "").trim();
     if (/\bis with\b/i.test(name)) name = name.split(/\bis with\b/i)[0].trim();
-    if (!name || name.length < 2 || name.length > 100) return "";
+    if (!name) return "";
+    if (name.length < 2 || name.length > 100) return "";
     if (name.startsWith("@")) return "";
     if (/^\d+$/.test(name)) return "";
-    // URLs with protocol
     if (/https?:\/\//i.test(name) || /@\w+\.\w+/.test(name)) return "";
-    // Short URLs without protocol (wa.me, bit.ly, t.co, etc.)
     if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(name)) return "";
     if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(name)) return "";
-    // Generic domain-like pattern: "word.tld/path"
     if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(name)) return "";
     const blocked = [
       /^view\b/i, /^see\b/i, /^like\b/i, /^likes$/i, /^reply\b/i, /^share\b/i,
@@ -99,9 +98,10 @@
       /^lihat/i, /^tampilkan/i, /^semua$/i, /^most relevant$/i, /^all comments$/i,
       /^newest$/i, /^terbaru$/i, /^paling relevan$/i, /^edited$/i, /^sponsor/i,
       /^follow$/i, /^following$/i, /^followers$/i, /^ikuti$/i, /^send\b/i,
-      /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i,
-      /^reels?$/i, /^add a comment/i, /^tulis komentar/i,
-      /^write a comment/i, /^see more$/i, /^lihat selengkapnya$/i,
+      /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i, /^reels?$/i,
+      /^add a comment/i, /^tulis komentar/i, /^write a comment/i,
+      /^see more$/i, /^lihat selengkapnya$/i,
+      /^tiktok$/i,
     ];
     if (blocked.some((re) => re.test(name))) return "";
     try {
@@ -111,9 +111,10 @@
     }
     return name;
   }
+  // END-RESO-NORMALIZE
 
   function addName(raw) {
-    const name = normalizeName(raw);
+    const name = normalizeCommentName(raw);
     if (!name) return false;
     const key = name.toLowerCase();
     if (nameMap.has(key)) return false;
@@ -299,7 +300,12 @@
     if (typeof obj.feedback_id === "string") out.add(obj.feedback_id);
     if (obj.__typename === "Feedback" && typeof obj.id === "string") out.add(obj.id);
     // common Relay id shape
-    if (typeof obj.id === "string" && obj.id.length > 10 && /feedback/i.test(JSON.stringify(obj.__typename || "")))
+    if (
+      typeof obj.id === "string" &&
+      obj.id.length > 10 &&
+      typeof obj.__typename === "string" &&
+      /feedback/i.test(obj.__typename)
+    )
       out.add(obj.id);
     for (const k of Object.keys(obj)) findFeedbackIds(obj[k], out, depth + 1);
     return out;
@@ -479,27 +485,31 @@
   }
 
   // ---------------- tokens / replay (active GraphQL pagination) ----------------
-  function getDtsg() {
+
+  // Cached anti-forgery tokens — RINGAN (tanpa menserialisasi seluruh DOM
+  // Facebook yang megabyte): require() dulu, scan <script> terbatas, input
+  // form, dan innerHTML hanya sebagai fallback terakhir (di-cache 5 menit).
+  const TOKEN_CACHE_TTL = 5 * 60 * 1000;
+  const tokenCache = { dtsg: null, lsd: null, at: 0 };
+
+  /**
+   * Cari token di dalam <script> tag saja (bukan documentElement.innerHTML):
+   * baca tiap tag, lewati yang raksasa (>400 KB, mis. payload feed/video),
+   * dan cek pola regex yang diberikan. Jauh lebih ringan daripada serialisasi
+   * seluruh DOM — DTSGInitialData/LSD selalu ada di script JSON/inline kecil.
+   */
+  function findTokenInScripts(patterns) {
     try {
-      const html = document.documentElement?.innerHTML || "";
-      let m = html.match(/"DTSGInitialData",\[\],\{"token":"([^"]+)"/);
-      if (m) return m[1];
-      m = html.match(/"token":"([A-Za-z0-9_:-]{8,})"[,}][^"]{0,40}DTSG/);
-      if (m) return m[1];
-      m = html.match(/name="fb_dtsg"\s+value="([^"]+)"/);
-      if (m) return m[1];
-      m = html.match(/"dtsg":\{"token":"([^"]+)"/);
-      if (m) return m[1];
-    } catch {
-      /* ignore */
-    }
-    try {
-      if (typeof require === "function") {
-        const d =
-          require("DTSGInitialData") ||
-          require("DTSG") ||
-          require("DTSGInitData");
-        if (d?.token) return d.token;
+      const scripts = document.querySelectorAll("script");
+      const limit = Math.min(scripts.length, 60);
+      for (let i = 0; i < limit; i++) {
+        const t = scripts[i].textContent || "";
+        if (!t || t.length > 400_000) continue;
+        if (!/DTSG|dtsg|LSD|lsd|fb_dtsg/i.test(t)) continue;
+        for (const re of patterns) {
+          const m = t.match(re);
+          if (m && m[1]) return m[1];
+        }
       }
     } catch {
       /* ignore */
@@ -507,17 +517,113 @@
     return null;
   }
 
-  function getLsd() {
+  function getDtsg() {
+    const now = Date.now();
+    if (tokenCache.dtsg && now - tokenCache.at < TOKEN_CACHE_TTL) {
+      return tokenCache.dtsg;
+    }
+    let token = null;
+    // 1) Modul sudah dimuat di memory — paling cepat, tanpa scan DOM.
     try {
-      const html = document.documentElement?.innerHTML || "";
-      const m = html.match(/"LSD",\[\],\{"token":"([^"]+)"/);
-      if (m) return m[1];
-      const inp = document.querySelector('input[name="lsd"]');
-      if (inp?.value) return inp.value;
+      if (typeof require === "function") {
+        const d =
+          require("DTSGInitialData") ||
+          require("DTSG") ||
+          require("DTSGInitData");
+        if (d?.token) token = d.token;
+      }
     } catch {
       /* ignore */
     }
-    return null;
+    // 2) Scan <script> tag (terbatas & ringan).
+    if (!token) {
+      token = findTokenInScripts([
+        /"DTSGInitialData",\[\],\{"token":"([^"]+)"/,
+        /"token":"([A-Za-z0-9_:-]{8,})"[,}][^"]{0,40}DTSG/,
+        /"dtsg":\{"token":"([^"]+)"/,
+      ]);
+    }
+    // 3) Form token (halaman klasik).
+    if (!token) {
+      try {
+        const inp = document.querySelector('input[name="fb_dtsg"]');
+        if (inp?.value) token = inp.value;
+      } catch {
+        /* ignore */
+      }
+    }
+    // 4) Fallback terakhir — mahal; di-cache 5 mnt jadi maksimal sekali per TTL.
+    if (!token) {
+      try {
+        const html = document.documentElement?.innerHTML || "";
+        let m = html.match(/"DTSGInitialData",\[\],\{"token":"([^"]+)"/);
+        if (m) token = m[1];
+        if (!token) {
+          m = html.match(/"token":"([A-Za-z0-9_:-]{8,})"[,}][^"]{0,40}DTSG/);
+          if (m) token = m[1];
+        }
+        if (!token) {
+          m = html.match(/name="fb_dtsg"\s+value="([^"]+)"/);
+          if (m) token = m[1];
+        }
+        if (!token) {
+          m = html.match(/"dtsg":\{"token":"([^"]+)"/);
+          if (m) token = m[1];
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+    if (token) {
+      tokenCache.dtsg = token;
+      tokenCache.at = now;
+    }
+    return token;
+  }
+
+  function getLsd() {
+    const now = Date.now();
+    if (tokenCache.lsd && now - tokenCache.at < TOKEN_CACHE_TTL) {
+      return tokenCache.lsd;
+    }
+    let token = null;
+    // 1) Modul dari memory dulu.
+    try {
+      if (typeof require === "function") {
+        const d = require("LSD") || require("LSDInitData");
+        if (d?.token) token = d.token;
+      }
+    } catch {
+      /* ignore */
+    }
+    // 2) Scan <script> tag (ringan).
+    if (!token) {
+      token = findTokenInScripts([/"LSD",\[\],\{"token":"([^"]+)"/]);
+    }
+    // 3) Form token.
+    if (!token) {
+      try {
+        const inp = document.querySelector('input[name="lsd"]');
+        if (inp?.value) token = inp.value;
+      } catch {
+        /* ignore */
+      }
+    }
+    // 4) Fallback terakhir (innerHTML) — di-cache 5 mnt.
+    if (!token) {
+      try {
+        const html = document.documentElement?.innerHTML || "";
+        const m = html.match(/"LSD",\[\],\{"token":"([^"]+)"/);
+        if (m) token = m[1];
+      } catch {
+        /* ignore */
+      }
+    }
+    if (token) {
+      tokenCache.lsd = token;
+      tokenCache.at = now;
+    }
+    return token;
   }
 
   function getUserId() {
@@ -571,6 +677,7 @@
   }
 
   async function graphqlReplay(template, cursor) {
+    requestBudget += 1;
     const params = { ...template.params };
     let variables = template.variables
       ? setCursorOnVariables(template.variables, cursor)
@@ -578,10 +685,7 @@
 
     // Refresh anti-forgery tokens
     const dtsg = getDtsg();
-    if (dtsg) {
-      params.fb_dtsg = dtsg;
-      if ("fb_dtsg" in params) params.fb_dtsg = dtsg;
-    }
+    if (dtsg) params.fb_dtsg = dtsg;
     const lsd = getLsd();
     if (lsd) params.lsd = lsd;
     const uid = getUserId();
@@ -606,18 +710,51 @@
     });
 
     const url = template.url || "https://www.facebook.com/api/graphql/";
-    const res = await fetch(url, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "X-FB-Friendly-Name":
-          params.fb_api_req_friendly_name || template.friendlyName || "Comments",
-        Accept: "*/*",
-      },
-      body: body.toString(),
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "X-FB-Friendly-Name":
+            params.fb_api_req_friendly_name || template.friendlyName || "Comments",
+          Accept: "*/*",
+        },
+        body: body.toString(),
+      });
+    } catch (err) {
+      const e = new Error("Jaringan terganggu — coba lagi.");
+      e.kind = "network";
+      throw e;
+    }
+    // Sesi kadaluarsa: FB redirect ke halaman login
+    if (res.redirected && /login/i.test(res.url)) {
+      const e = new Error("Sesi Facebook tidak aktif — login lalu Proses lagi.");
+      e.kind = "no_login";
+      throw e;
+    }
     const text = await res.text();
+    // HTTP 200 tapi isi HTML login (token kadaluarsa) — bukan data komentar
+    if (/<html[\s>]/i.test(text) && /login|masuk/i.test(text)) {
+      const e = new Error("Sesi Facebook tidak aktif — login lalu Proses lagi.");
+      e.kind = "no_login";
+      throw e;
+    }
+    if (!res.ok) {
+      if (res.status === 429) {
+        const ra = Number(res.headers.get("retry-after"));
+        const e = new Error(
+          "Rate limit Facebook (HTTP 429) — jeda sejenak lalu coba lagi."
+        );
+        e.kind = "rate_limit";
+        e.retryAfter = Number.isFinite(ra) && ra > 0 ? ra : null;
+        throw e;
+      }
+      const e = new Error(`GraphQL HTTP ${res.status}`);
+      e.kind = "http";
+      throw e;
+    }
     pushGqlBuffer(text);
     extractNamesFromText(text);
 
@@ -665,13 +802,186 @@
     };
   }
 
-  async function paginateGraphql(maxMs) {
-    // Prefer newest top-level comment template
-    let template =
-      (lastTopLevelKey && gqlTemplates.get(lastTopLevelKey)) ||
-      [...gqlTemplates.values()].sort((a, b) => b.capturedAt - a.capturedAt)[0];
+  /**
+   * graphqlReplay dengan ketahanan: backoff adaptif 429 (hormati Retry-After,
+   * eskalasi 8s → 16s, maks 2 retry, hanya jika sisa waktu cukup), retry cepat
+   * untuk blip jaringan, heartbeat PROGRESS selama menunggu. Error no_login
+   * diteruskan agar run berhenti aman.
+   */
+  async function graphqlReplayWithBackoff(template, cursor, deadline) {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await graphqlReplay(template, cursor);
+      } catch (err) {
+        const kind = err && err.kind;
+        if (kind === "no_login") throw err;
+        if (kind === "rate_limit") {
+          const ra = err.retryAfter;
+          const waitMs =
+            ra && ra > 0
+              ? Math.min(ra, 20) * 1000
+              : attempt === 0
+                ? 8000
+                : 16000;
+          if (attempt >= 2 || Date.now() + waitMs > deadline) throw err;
+          attempt++;
+          post("PROGRESS", {
+            names: snapshot(),
+            message: `Rate limit (429) — jeda ${Math.round(waitMs / 1000)} dtk…`,
+            postHint: "rate_limit",
+          });
+          if (!(await sleepWhile(waitMs))) throw err;
+          continue;
+        }
+        if (kind === "network" && attempt === 0) {
+          attempt++;
+          if (Date.now() + 1500 > deadline) throw err;
+          await sleepWhile(1200);
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
 
-    if (!template) return { mode: "none", reason: "no_template" };
+  /** Capture-shaped → likely a real comments pagination query (not composer/teaser). */
+  function isPaginationLike(t) {
+    if (!t) return false;
+    let v = t.variables;
+    if (typeof v === "string") {
+      try {
+        v = JSON.parse(v);
+      } catch {
+        v = null;
+      }
+    }
+    const flat = JSON.stringify(v || {});
+    return /cursor|page_info|has_next_page|commentsAfterCursor|feedbackID|feedback_id|comments\b/i.test(
+      flat
+    );
+  }
+
+  /** Ordered candidates for top-level pagination: shaped → last top-level → newest. */
+  function orderedCandidates() {
+    const nonReply = [...gqlTemplates.values()]
+      .filter((t) => t.friendlyName && !/reply|depth1|replies/i.test(t.friendlyName))
+      .sort((a, b) => b.capturedAt - a.capturedAt);
+    if (!nonReply.length) return [];
+    const out = [];
+    const push = (t) => {
+      if (t && !out.includes(t)) out.push(t);
+    };
+    for (const t of nonReply) if (isPaginationLike(t)) push(t);
+    if (lastTopLevelKey && gqlTemplates.has(lastTopLevelKey)) {
+      push(gqlTemplates.get(lastTopLevelKey));
+    }
+    for (const t of nonReply) push(t);
+    return out;
+  }
+
+  function feedbackIdFromUrl() {
+    try {
+      const href = String(location.href);
+      const patterns = [
+        /\/posts\/(\d+)/,
+        /\/permalink\.php\?story_fbid=(\d+)/,
+        /\/story\.php\?story_fbid=(\d+)/,
+        /\/photos\/(\d+)/,
+        /\/videos\/(\d+)/,
+        /\/reel\/(\d+)/,
+        /\/watch\/(\d+)/,
+        /^\/(\d{8,})(?:\/|\?|$)/,
+      ];
+      for (const re of patterns) {
+        const m = href.match(re);
+        if (m && m[1]) return m[1];
+      }
+      const u = new URL(href);
+      const sf = u.searchParams.get("story_fbid") || u.searchParams.get("fbid");
+      if (sf && /^\d+$/.test(sf)) return sf;
+    } catch {
+      /* ignore */
+    }
+    return null;
+  }
+
+  /**
+   * If no GraphQL template was ever captured, build the comments pagination
+   * query directly from the post id in the URL (like standalone scrapers do),
+   * so the user does not have to open/scroll the comment list first.
+   */
+  function buildSyntheticPaginationTemplate() {
+    const feedbackId = feedbackIdFromUrl();
+    if (!feedbackId) return null;
+    return {
+      url: "https://www.facebook.com/api/graphql/",
+      params: {},
+      variables: {
+        count: 20,
+        cursor: null,
+        feedbackSource: 44,
+        actionSource: "anywhere",
+        queryPath: "/comments/pagination/",
+        scale: 1,
+        isFirstLoad: true,
+        previewComments: false,
+        feedbackID: feedbackId,
+        useDefaultActor: false,
+        __relay_internal__pv__IsWorkUserrelayprovider: false,
+      },
+      friendlyName: "CometUFICommentsProviderPaginationQuery",
+      capturedAt: Date.now(),
+    };
+  }
+
+  async function paginateGraphql(maxMs) {
+    const candidates = orderedCandidates();
+    if (!candidates.length) return { mode: "none", reason: "no_template" };
+    const deadline = Date.now() + maxMs;
+
+    // Verify which candidate actually paginates (probe page 1 once)
+    let template = null;
+    let lastProbeErr = null;
+    for (const cand of candidates.slice(0, 3)) {
+      if (stopFlag) return { mode: "graphql", reason: "stopped" };
+      try {
+        const probe = await graphqlReplayWithBackoff(cand, null, deadline);
+        if (probe.page && probe.page.hasNext !== undefined) {
+          template = cand;
+          break;
+        }
+      } catch (err) {
+        lastProbeErr = err;
+        // Rate limit saat probe = jangan lanjut hammer; berhenti aman
+        if (err && err.kind === "rate_limit") {
+          return {
+            mode: "graphql",
+            reason: "rate_limit",
+            error: String(err.message || err),
+          };
+        }
+        if (err && err.kind === "no_login") {
+          return {
+            mode: "graphql",
+            reason: "no_login",
+            error: String(err.message || err),
+          };
+        }
+        /* try next candidate */
+      }
+    }
+    if (!template) {
+      // Probe gagal semua — jangan paksa pagination yang pasti error
+      if (lastProbeErr) {
+        return {
+          mode: "graphql",
+          reason: nameMap.size ? "timeout" : "error",
+          error: String(lastProbeErr.message || lastProbeErr),
+        };
+      }
+      template = candidates[0];
+    }
 
     engineMode = "graphql";
     post("PROGRESS", {
@@ -700,12 +1010,31 @@
     let reason = "complete";
     const replyQueue = [];
 
+    let emptyPages = 0;
     while (running && !stopFlag && Date.now() - start < maxMs) {
+      if (requestBudget >= REQUEST_BUDGET) {
+        reason = "timeout";
+        break;
+      }
       const before = nameMap.size;
       let result;
       try {
-        result = await graphqlReplay(template, cursor);
+        result = await graphqlReplayWithBackoff(template, cursor, deadline);
       } catch (err) {
+        const kind = err && err.kind;
+        if (kind === "rate_limit")
+          return {
+            mode: "graphql",
+            reason: "rate_limit",
+            error: String(err.message || err),
+          };
+        if (kind === "no_login")
+          return {
+            mode: "graphql",
+            reason: "no_login",
+            error: String(err.message || err),
+          };
+        if (kind === "stopped") return { mode: "graphql", reason: "stopped" };
         return {
           mode: "graphql",
           reason: nameMap.size ? "timeout" : "error",
@@ -714,6 +1043,11 @@
       }
 
       pages++;
+      // Budget guard: never paginate forever on huge threads
+      if (pages > 120) {
+        reason = "timeout";
+        break;
+      }
       if (result.replyIds?.length) replyQueue.push(...result.replyIds);
 
       post("PROGRESS", {
@@ -725,11 +1059,28 @@
       if (nameMap.size === before) idle++;
       else idle = 0;
 
-      const hasNext = result.page?.hasNext;
-      const endCursor = result.page?.endCursor;
+      // Halaman kosong / JSON gagal diparse — retry cursor sama 2× sebelum menyerah
+      if (!result.page) {
+        emptyPages++;
+        if (emptyPages <= 2 && Date.now() - start < maxMs - 3000) {
+          await sleepWhile(700 + Math.random() * 500);
+          continue;
+        }
+        reason = "idle";
+        break;
+      }
+      emptyPages = 0;
 
-      if (!hasNext || !endCursor) {
+      const hasNext = result.page.hasNext;
+      const endCursor = result.page.endCursor;
+
+      if (hasNext === false) {
         reason = "complete";
+        break;
+      }
+      if (hasNext === true && !endCursor) {
+        // FB bilang masih ada, tapi tanpa cursor — tidak bisa lanjut
+        reason = "idle";
         break;
       }
       if (idle >= 4) {
@@ -741,7 +1092,10 @@
         break;
       }
       cursor = endCursor;
-      await sleep(500 + Math.random() * 700);
+      if (!(await sleepWhile(500 + Math.random() * 700))) {
+        reason = "stopped";
+        break;
+      }
     }
 
     if (stopFlag) reason = "stopped";
@@ -762,14 +1116,22 @@
         postHint: "replies",
       });
       const unique = [...new Set(replyQueue)].slice(0, 25);
+      const REPLY_BUDGET = 40;
+      let replyRequests = 0;
+      let replyFailStreak = 0;
       for (const fbId of unique) {
         if (stopFlag || Date.now() - start >= maxMs) break;
+        if (replyRequests >= REPLY_BUDGET) break;
         try {
           // inject feedback id into variables if present
           const vars = replyTpl.variables
             ? JSON.parse(JSON.stringify(replyTpl.variables))
             : {};
+          // Reply queries may name the feedback field differently per template
+          // shape — set whichever key the captured variables actually use.
           if ("id" in vars) vars.id = fbId;
+          else if ("feedbackID" in vars) vars.feedbackID = fbId;
+          else if ("feedback_id" in vars) vars.feedback_id = fbId;
           else vars.id = fbId;
           const tpl = {
             ...replyTpl,
@@ -778,16 +1140,41 @@
           };
           let rCursor = null;
           for (let p = 0; p < 8 && !stopFlag; p++) {
-            const r = await graphqlReplay(
+            if (
+              replyRequests >= REPLY_BUDGET ||
+              requestBudget >= REQUEST_BUDGET ||
+              Date.now() - start >= maxMs
+            )
+              break;
+            const r = await graphqlReplayWithBackoff(
               { ...tpl, variables: setCursorOnVariables(vars, rCursor) },
-              rCursor
+              rCursor,
+              deadline
             );
+            replyRequests++;
             if (!r.page?.hasNext || !r.page?.endCursor) break;
             rCursor = r.page.endCursor;
-            await sleep(400 + Math.random() * 400);
+            if (!(await sleepWhile(400 + Math.random() * 400))) break;
           }
-        } catch {
-          /* ignore one reply thread */
+          replyFailStreak = 0;
+        } catch (err) {
+          const kind = err && err.kind;
+          // 429 / sesi kadaluarsa di balasan = hentikan seluruh run (jangan hammer)
+          if (kind === "no_login")
+            return {
+              mode: "graphql",
+              reason: "no_login",
+              error: String(err.message || err),
+            };
+          if (kind === "rate_limit")
+            return {
+              mode: "graphql",
+              reason: "rate_limit",
+              error: String(err.message || err),
+            };
+          if (kind === "stopped") return { mode: "graphql", reason: "stopped" };
+          replyFailStreak++;
+          if (replyFailStreak >= 2) break;
         }
         post("PROGRESS", {
           names: snapshot(),
@@ -953,27 +1340,52 @@
   }
 
   async function tryOpenComments(scope) {
-    for (const el of qsa('[role="button"], a[role="link"]', scope || document)) {
-      const t = `${el.innerText || ""} ${el.getAttribute("aria-label") || ""}`.trim();
-      if (
-        /^\d[\d.,\s]*\s*(comments?|komentar)/i.test(t) ||
-        /view.*(comment|komentar)|lihat.*komentar/i.test(t)
-      ) {
-        try {
-          el.click();
-          await sleep(600);
-          return true;
-        } catch {
-          /* ignore */
-        }
+    // Already open? (post article + nested comment articles)
+    if (scope && scope.querySelectorAll('[role="article"]').length > 1) return true;
+    const COMMENT_COUNT = /^\d[\d.,\s]*(?:k|rb)?\s*(?:komentar|comments?)\b/i;
+    const VIEW_COMMENTS =
+      /view.*(?:comment|komentar)|lihat.*komentar|lihat\s+semua\s+komentar/i;
+    const els = qsa(
+      '[role="button"], a[role="link"], [role="tab"], [aria-label], span[dir="auto"]',
+      scope || document
+    );
+    for (const el of els) {
+      if (!isVisible(el)) continue;
+      const t = `${el.innerText || ""} ${el.getAttribute("aria-label") || ""}`
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!t || t.length > 120) continue;
+      if (!COMMENT_COUNT.test(t) && !VIEW_COMMENTS.test(t)) continue;
+      try {
+        el.scrollIntoView({ block: "center" });
+        el.click();
+        await sleepWhile(700);
+        if (gqlTemplates.size > 0) return true;
+      } catch {
+        /* ignore */
       }
     }
     return false;
   }
 
+  /** Scrollable comment container (so we scroll the list, not the whole page). */
+  function findScrollContainer(root) {
+    if (!root) return null;
+    const els = [root, ...root.querySelectorAll("*")];
+    for (let i = 0; i < els.length && i < 3000; i++) {
+      const el = els[i];
+      if (el.scrollHeight > el.clientHeight + 80) {
+        const st = getComputedStyle(el);
+        if (st.overflowY === "auto" || st.overflowY === "scroll") return el;
+      }
+    }
+    return null;
+  }
+
   async function expandDomLoop(maxMs) {
     const start = Date.now();
     const savedScrollY = window.scrollY;
+    const scroller = findScrollContainer(postRoot);
     let idle = 0;
     let rounds = 0;
     while (running && !stopFlag && Date.now() - start < maxMs) {
@@ -989,10 +1401,11 @@
         } catch {
           /* ignore */
         }
-        await sleep(300);
+        await sleepWhile(300);
       }
       try {
-        window.scrollBy(0, 350);
+        if (scroller) scroller.scrollTop += 400;
+        else window.scrollBy(0, 350);
       } catch {
         /* ignore */
       }
@@ -1005,7 +1418,7 @@
       else idle = 0;
       if (nameMap.size === 0 && idle >= 18) break;
       if (nameMap.size > 0 && idle >= 10) break;
-      await sleep(500);
+      if (!(await sleepWhile(500))) break;
     }
     // Restore scroll position after DOM expansion
     try { window.scrollTo(0, savedScrollY); } catch { /* ignore */ }
@@ -1013,6 +1426,16 @@
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** Sleep interruptible — resolve false kalau Stop ditekan (cek tiap 200 ms). */
+  async function sleepWhile(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (stopFlag) return false;
+      await sleep(Math.min(200, Math.max(20, end - Date.now())));
+    }
+    return true;
+  }
 
   // ---------------- main run ----------------
   async function runExtract(options = {}) {
@@ -1052,7 +1475,7 @@
     try {
       // 1) Ensure comments are loading so we capture GraphQL templates
       await tryOpenComments(postRoot);
-      await sleep(800);
+      await sleepWhile(800);
       drainGqlBuffer();
       scrapeDomNames(postRoot);
 
@@ -1073,7 +1496,7 @@
           }
           scrapeDomNames(document);
           drainGqlBuffer();
-          await sleep(700);
+          await sleepWhile(700);
           post("PROGRESS", {
             names: snapshot(),
             message: `Menunggu GraphQL… template=${gqlTemplates.size}, nama=${nameMap.size}`,
@@ -1091,6 +1514,15 @@
       const gqlBudget = Math.max(20_000, maxMs - reserveDomMs);
 
       // 3) Primary: GraphQL pagination (ESuit-like)
+      //    If nothing was captured (comments never opened), build the query
+      //    directly from the post id so no scrolling is needed.
+      if (gqlTemplates.size === 0 && !stopFlag) {
+        const syn = buildSyntheticPaginationTemplate();
+        if (syn) {
+          gqlTemplates.set("__synthetic__", syn);
+          lastTopLevelKey = "__synthetic__";
+        }
+      }
       if (gqlTemplates.size > 0 && !stopFlag) {
         const g = await paginateGraphql(gqlBudget);
         finalReason = g.reason || "complete";
@@ -1139,7 +1571,12 @@
       if (currentRunId === myRunId) {
         const names = snapshot();
         let tip = "";
-        if (!names.length) {
+        if (finalReason === "rate_limit") {
+          tip =
+            " Rate limit (429) — berhenti agar akun aman. Tunggu beberapa saat, lalu Proses lagi.";
+        } else if (finalReason === "no_login") {
+          tip = " Sesi Facebook tidak aktif — login di facebook.com lalu Proses lagi.";
+        } else if (!names.length) {
           tip =
             " Tip: buka permalink post, buka list komentar sampai terlihat, tunggu 2–3 dtk, lalu Proses lagi (biar GraphQL ter-capture).";
         }

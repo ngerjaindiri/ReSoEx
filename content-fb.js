@@ -19,6 +19,8 @@
   let stopFinalizeTimer = null;
   /** @type {((v: boolean) => void) | null} */
   let readyWaiter = null;
+  /** true saat user sengaja menutup panel (min) — jangan dipaksa buka lagi */
+  let userCollapsed = false;
 
   function sendBg(type, payload = {}) {
     try {
@@ -60,8 +62,45 @@
     return engineReady;
   }
 
-  function mergeNames(list) {
-    const map = new Map();
+  // BEGIN-RESO-NORMALIZE
+  function normalizeCommentName(raw) {
+    if (typeof raw !== "string") return "";
+    let name = raw
+      .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    name = name.replace(/\s+[·•|].*$/, "").trim();
+    name = name.replace(
+      /\s+(sekitar\s+)?(satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa)\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
+      ""
+    );
+    name = name.replace(
+      /\s+(sehari|semenit|sejam|setahun|seminggu|sebulan)\s+(yang\s+lalu|lalu).*$/i,
+      ""
+    );
+    name = name.replace(
+      /\s+\d+\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
+      ""
+    );
+    name = name.replace(
+      /\s+(about\s+)?(a|an|\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago.*$/i,
+      ""
+    );
+    name = name.replace(/\s+just\s+now.*$/i, "");
+    name = name.replace(
+      /\s+\d+\s*(d|h|m|w|y|jam|menit|hari|minggu|tahun|bulan|hr|min|detik|sec|second|minute|hour|day|week|month|year)s?\b.*$/i,
+      ""
+    );
+    name = name.replace(/\s+Edited$/i, "").trim();
+    if (/\bis with\b/i.test(name)) name = name.split(/\bis with\b/i)[0].trim();
+    if (!name) return "";
+    if (name.length < 2 || name.length > 100) return "";
+    if (name.startsWith("@")) return "";
+    if (/^\d+$/.test(name)) return "";
+    if (/https?:\/\//i.test(name) || /@\w+\.\w+/.test(name)) return "";
+    if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(name)) return "";
+    if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(name)) return "";
+    if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(name)) return "";
     const blocked = [
       /^view\b/i, /^see\b/i, /^like\b/i, /^likes$/i, /^reply\b/i, /^share\b/i,
       /^comment\b/i, /^write\b/i, /^log\s*in/i, /^sign\s*up/i, /^facebook$/i,
@@ -72,44 +111,117 @@
       /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i, /^reels?$/i,
       /^add a comment/i, /^tulis komentar/i, /^write a comment/i,
       /^see more$/i, /^lihat selengkapnya$/i,
+      /^tiktok$/i,
     ];
+    if (blocked.some((re) => re.test(name))) return "";
+    try {
+      if (!/[\p{L}\p{N}]/u.test(name)) return "";
+    } catch {
+      if (!/[a-zA-Z0-9\u00C0-\u024F]/.test(name)) return "";
+    }
+    return name;
+  }
+  // END-RESO-NORMALIZE
+
+  // BEGIN-RESO-DONEMSG
+  /**
+   * SINGLE SOURCE OF TRUTH untuk pesan akhir run (DONE). Dipakai oleh
+   * background/popup (via reasonToMessage) dan ketiga panel (content-*.js)
+   * lewat salinan byte-identik di dalam marker yang sama — dijamin oleh
+   * fixture test DONEMSG agar tidak pernah drift.
+   * @param {string} reason stopReason dari engine (complete/idle/stopped/...)
+   * @param {number} count jumlah hasil terkumpul
+   * @param {"facebook"|"tiktok"|"instagram"} platform
+   * @param {{extra?: string, tip?: string}} [options] extra = diagnosis tambahan
+   *   (mis. 429 saat timeout), tip = panduan saat tidak ada hasil
+   * @returns {string}
+   */
+  function doneMessage(reason, count, platform, options) {
+    const word = platform === "instagram" ? "username" : "nama";
+    const extra =
+      options && typeof options.extra === "string" && options.extra
+        ? ` ${options.extra}`
+        : "";
+    const tip =
+      options && typeof options.tip === "string" && options.tip
+        ? ` ${options.tip}`
+        : "";
+    const c = Number.isFinite(count) ? count : 0;
+
+    if (reason === "stopped") {
+      return c
+        ? `Dihentikan — ${c} ${word}.${extra} Klik Copy.`
+        : `Dihentikan — belum ada ${word}.${extra}`;
+    }
+    if (reason === "timeout") {
+      return c
+        ? `Waktu habis — ${c} ${word} (mungkin belum semua).${extra} Klik Copy.`
+        : `Waktu habis — belum ada ${word}.${extra}`;
+    }
+    if (reason === "idle" || reason === "complete") {
+      if (c) return `Selesai — ${c} ${word}.${extra} Klik Copy.`;
+      if (tip) return `Tidak ada ${word}.${tip}`;
+      if (platform === "facebook")
+        return "Tidak ada nama. Buka permalink post, buka list komentar sampai terlihat, tunggu 2–3 dtk, lalu Proses lagi.";
+      if (platform === "tiktok")
+        return "Tidak ada nama. Pastikan komentar terbuka di video, lalu Proses lagi.";
+      return "Tidak ada username. Pastikan komentar terbuka & sudah login, lalu Proses lagi.";
+    }
+    if (reason === "error") {
+      return extra.trim() || "Terjadi error saat ekstrak.";
+    }
+    if (reason === "rate_limit") {
+      const who =
+        platform === "facebook"
+          ? "Facebook"
+          : platform === "tiktok"
+            ? "TikTok"
+            : "Instagram";
+      return c
+        ? `Rate limit ${who} (429) — ${c} ${word} terkumpul. Tunggu beberapa saat, lalu Proses lagi.`
+        : `Rate limit ${who} (429) — tunggu beberapa saat, lalu coba lagi.`;
+    }
+    if (reason === "blocked") {
+      return c
+        ? `Instagram memblokir permintaan (403) — kemungkinan anti-bot. ${c} username terkumpul. Tunggu beberapa saat, lalu Proses lagi.`
+        : "Instagram memblokir permintaan (403) — kemungkinan anti-bot atau App-ID ditolak. Berhenti agar akun aman; coba lagi beberapa saat kemudian.";
+    }
+    if (reason === "checkpoint") {
+      return c
+        ? `Instagram minta verifikasi (checkpoint). ${c} username terkumpul — buka instagram.com, selesaikan verifikasi, lalu Proses lagi.`
+        : "Instagram minta verifikasi (checkpoint). Buka instagram.com, selesaikan verifikasi, lalu Proses lagi.";
+    }
+    if (reason === "no_template") {
+      if (platform === "instagram") {
+        return "Belum ada template API komentar. Buka post/reel, klik ikon komentar dulu, tunggu list muncul, lalu Proses lagi (wajib login).";
+      }
+      if (platform === "facebook") {
+        return "Belum ada template GraphQL komentar. Buka permalink post, buka list komentar sampai terlihat, tunggu 2–3 detik, lalu Proses lagi.";
+      }
+      return "Belum ada template API komentar. Buka video, klik ikon komentar dulu, tunggu komentar muncul, lalu Proses lagi.";
+    }
+    if (reason === "no_video") {
+      return "Buka halaman video TikTok dulu (URL berisi /video/...), bukan For You feed saja.";
+    }
+    if (reason === "no_login") {
+      if (platform === "facebook")
+        return "Sesi Facebook tidak aktif — login di facebook.com lalu Proses lagi.";
+      if (platform === "tiktok")
+        return "Sesi TikTok tidak aktif — login di tiktok.com lalu Proses lagi.";
+      return "Butuh login Instagram. Buka instagram.com, login, lalu buka post & Proses lagi.";
+    }
+    if (reason === "no_media") {
+      return "Buka halaman post/reel Instagram dulu (URL /p/... atau /reel/...).";
+    }
+    return c ? `${c} ${word}` : "Siap.";
+  }
+  // END-RESO-DONEMSG
+
+  function mergeNames(list) {
+    const map = new Map();
     for (const n of list || []) {
-      if (typeof n !== "string") continue;
-      let k = n
-        .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      k = k
-        .replace(/\s+[·•|].*$/, "")
-        .replace(
-          /\s+(sekitar\s+)?(satu|dua|tiga|empat|lima|enam|tujuh|delapan|sembilan|sepuluh|beberapa)\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
-          ""
-        )
-        .replace(
-          /\s+(sehari|semenit|sejam|setahun|seminggu|sebulan)\s+(yang\s+lalu|lalu).*$/i,
-          ""
-        )
-        .replace(
-          /\s+\d+\s+(jam|menit|detik|hari|minggu|tahun|bulan)\s+(yang\s+lalu|lalu).*$/i,
-          ""
-        )
-        .replace(
-          /\s+(about\s+)?(a|an|\d+)\s+(second|minute|hour|day|week|month|year)s?\s+ago.*$/i,
-          ""
-        )
-        .replace(/\s+just\s+now.*$/i, "")
-        .replace(/\s+\d+\s*(d|h|m|w|y|jam|menit|hari|minggu|tahun|bulan|hr|min|detik|sec|second|minute|hour|day|week|month|year)s?\b.*$/i, "")
-        .replace(/\s+Edited$/i, "")
-        .trim();
-      if (/\bis with\b/i.test(k)) k = k.split(/\bis with\b/i)[0].trim();
-      if (k.length < 2 || k.length > 100) continue;
-      if (/^\d+$/.test(k) || /^@/.test(k)) continue;
-      if (/https?:\/\//i.test(k) || /@\w+\.\w+/.test(k)) continue;
-      if (/^(wa\.me|bit\.ly|t\.co|goo\.gl|tinyurl\.com|s\.id|link\.)\b/i.test(k)) continue;
-      if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(k)) continue;
-      if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(k)) continue;
-      if (blocked.some((re) => re.test(k))) continue;
-      map.set(k.toLowerCase(), k);
+      const k = normalizeCommentName(n);
+      if (k && !map.has(k.toLowerCase())) map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
   }
@@ -227,9 +339,7 @@
       const list = names.slice();
       setLocalState({
         status: list.length ? "stopped" : "error",
-        message: list.length
-          ? `Dihentikan — ${list.length} nama. Klik Copy.`
-          : "Dihentikan — belum ada nama.",
+        message: doneMessage("stopped", list.length, "facebook"),
       });
       sendBg("NAMES_DONE", {
         names: list,
@@ -238,6 +348,23 @@
         postHint,
       });
     }, 5000);
+  }
+
+  async function doReset() {
+    startGen += 1;
+    if (stopFinalizeTimer) {
+      clearTimeout(stopFinalizeTimer);
+      stopFinalizeTimer = null;
+    }
+    await engineCmd("STOP");
+    currentRunId = null;
+    setLocalState({
+      status: "idle",
+      names: [],
+      message: "Buka 1 postingan, lalu klik Proses.",
+      postHint: "",
+    });
+    await sendBg("RESET");
   }
 
   function markBestPostRoot() {
@@ -304,7 +431,7 @@
         });
         return true;
       } catch {
-        setLocalState({ message: "Gagal copy. Coba lewat ikon extension." });
+        setLocalState({ message: "Gagal copy. Coba lagi dari panel atau popup." });
         return false;
       } finally {
         ta.remove();
@@ -331,30 +458,34 @@
     }
     const root = document.createElement("div");
     root.id = ROOT_ID;
-    // Panel starts collapsed — control utama = ikon di bar Like/Comment/Share
+    // Default visibility: collapsed — otomatis diperluas saat ada hasil
+    // (sama dengan TikTok/Instagram). Buka lewat FAB atau ikon di bar Like.
     root.classList.add("fnk-collapsed");
     root.innerHTML = `
       <div class="fnk-panel" role="region" aria-label="FB Nama Komentar">
         <div class="fnk-header">
-          <span class="fnk-logo">N</span>
+          <span class="fnk-logo" aria-hidden="true">N</span>
           <span class="fnk-title">Nama Komentar</span>
-          <button type="button" class="fnk-min" title="Tutup" data-fnk="min">×</button>
+          <button type="button" class="fnk-min" title="Tutup" aria-label="Tutup panel" data-fnk="min">–</button>
         </div>
         <div class="fnk-body">
-          <div class="fnk-status" data-fnk="status"></div>
+          <div class="fnk-status" data-fnk="status" aria-live="polite"></div>
           <div class="fnk-hint" data-fnk="hint"></div>
           <div class="fnk-count" data-fnk="count"></div>
+          <div class="fnk-badge" data-fnk="badge"></div>
           <label class="fnk-check">
             <input type="checkbox" data-fnk="replies" checked />
-            Sertakan balasan
+            Sertakan balasan (reply)
           </label>
           <div class="fnk-actions">
-            <button type="button" class="fnk-btn fnk-primary" data-fnk="process">Proses</button>
-            <button type="button" class="fnk-btn" data-fnk="stop" hidden>Stop</button>
-            <button type="button" class="fnk-btn fnk-success" data-fnk="copy" disabled>Copy nama</button>
+            <button type="button" class="fnk-btn fnk-primary" data-fnk="process" title="Mulai ambil nama">Proses</button>
+            <button type="button" class="fnk-btn" data-fnk="stop" hidden title="Hentikan">Stop</button>
+            <button type="button" class="fnk-btn fnk-success" data-fnk="copy" disabled title="Salin ke clipboard">Copy nama</button>
+            <button type="button" class="fnk-btn fnk-ghost" data-fnk="reset" title="Bersihkan hasil & reset">Reset</button>
           </div>
         </div>
       </div>
+      <button type="button" class="fnk-fab" data-fnk="fab" data-count="" title="Nama Komentar" aria-label="Buka panel Nama Komentar">N</button>
     `;
     (document.body || document.documentElement).appendChild(root);
     ui = root;
@@ -366,7 +497,15 @@
       if (act === "process") startExtract();
       if (act === "stop") stopExtract();
       if (act === "copy") copyNames();
-      if (act === "min") root.classList.add("fnk-collapsed");
+      if (act === "reset") doReset();
+      if (act === "min") {
+        root.classList.add("fnk-collapsed");
+        userCollapsed = true;
+      }
+      if (act === "fab") {
+        root.classList.remove("fnk-collapsed");
+        userCollapsed = false;
+      }
     });
     root.addEventListener("change", (e) => {
       const t = e.target;
@@ -374,10 +513,55 @@
         includeReplies = !!t.checked;
       }
     });
+    // Keyboard: Esc menutup panel (setara tombol min).
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !ui) return;
+      if (!ui.classList.contains("fnk-collapsed")) {
+        ui.classList.add("fnk-collapsed");
+        userCollapsed = true;
+      }
+    });
 
     ensureActionIcon();
+    applySettings();
     return root;
   }
+
+  /**
+   * Apply Options (rsx_prefs): panel theme + default "sertakan balasan".
+   * Runs on boot and whenever Options change (storage.onChanged).
+   */
+  function applySettings() {
+    try {
+      chrome.storage.local
+        .get("rsx_prefs")
+        .then((d) => {
+          const prefs = d?.rsx_prefs || {};
+          const root = document.getElementById(ROOT_ID);
+          if (root) {
+            const theme =
+              prefs.theme === "light" || prefs.theme === "dark"
+                ? prefs.theme
+                : window.matchMedia("(prefers-color-scheme: dark)").matches
+                  ? "dark"
+                  : "light";
+            root.setAttribute("data-rs-theme", theme);
+          }
+          const v = prefs.includeReplies?.facebook;
+          if (status !== "running" && typeof v === "boolean" && includeReplies !== v) {
+            includeReplies = v;
+            renderUi();
+          }
+        })
+        .catch(() => {});
+    } catch {
+      /* ignore */
+    }
+  }
+
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes.rsx_prefs) applySettings();
+  });
 
   /** Small icon-only control near Like / Comment / Share */
   function ensureActionIcon() {
@@ -387,8 +571,8 @@
     chip.className = "fnk-inline-hidden";
     chip.innerHTML = `
       <button type="button" class="fnk-action-icon" data-fnk-inline="main"
-        title="Ambil nama komentar (klik lagi untuk copy)"
-        aria-label="Ambil nama komentar">
+        title="Buka panel Nama Komentar"
+        aria-label="Buka panel Nama Komentar">
         <svg class="fnk-action-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
           <path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v1h16v-1c0-2.66-5.33-4-8-4z"/>
         </svg>
@@ -400,32 +584,20 @@
       e.stopPropagation();
       const t = e.target.closest("[data-fnk-inline]");
       if (!t) return;
+      // Model interaksi seragam dengan FAB: klik chip = BUKA PANEL saja
+      // (bukan langsung proses/copy). Post tempat chip berada ditandai agar
+      // engine menyasar post yang benar saat Proses ditekan.
       markPostFromEl(chip);
-      const running = status === "running";
-      if (running) {
-        stopExtract();
-        return;
+      if (ui) {
+        ui.classList.remove("fnk-collapsed");
+        userCollapsed = false;
       }
-      // Done with names → copy; else start extract
-      if (
-        names.length > 0 &&
-        (status === "done" || status === "partial" || status === "stopped")
-      ) {
-        copyNames();
-        if (ui) {
-          ui.classList.remove("fnk-collapsed");
-        }
-        return;
-      }
-      // Open tiny panel for progress feedback, then process
-      if (ui) ui.classList.remove("fnk-collapsed");
-      startExtract();
     });
     // Right-click / long alternative: open panel only
     chip.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      if (ui) ui.classList.toggle("fnk-collapsed");
+      if (ui) userCollapsed = ui.classList.toggle("fnk-collapsed");
     });
     document.documentElement.appendChild(chip);
   }
@@ -523,11 +695,38 @@
     }
   }
 
+  /** FB: engine dapat paginate via GraphQL bila halaman post permalink
+   *  (synthetic template dari feedbackId di URL — mirror shared.isFacebookPostPage). */
+  function fbGraphqlReady() {
+    const href = String(location.href);
+    if (
+      /\/posts\/\d+/.test(href) ||
+      /\/permalink\.php\?story_fbid=\d+/.test(href) ||
+      /\/story\.php\?story_fbid=\d+/.test(href) ||
+      /\/photos\/\d+/.test(href) ||
+      /\/videos\/\d+/.test(href) ||
+      /\/reel\/\d+/.test(href) ||
+      /\/watch\/\d+/.test(href) ||
+      /[?&](?:story_fbid|fbid)=\d+/.test(href)
+    ) {
+      return true;
+    }
+    try {
+      const path = new URL(href).pathname.replace(/^\/+|\/+$/g, "");
+      if (/^\d{8,}$/.test(path)) return true;
+    } catch {
+      /* ignore */
+    }
+    return false;
+  }
+
   function renderUi() {
     if (!ui) createUi();
+    ui.setAttribute("data-status", status || "idle");
     const statusEl = ui.querySelector('[data-fnk="status"]');
     const hintEl = ui.querySelector('[data-fnk="hint"]');
     const countEl = ui.querySelector('[data-fnk="count"]');
+    const badgeEl = ui.querySelector('[data-fnk="badge"]');
     const processBtn = ui.querySelector('[data-fnk="process"]');
     const stopBtn = ui.querySelector('[data-fnk="stop"]');
     const copyBtn = ui.querySelector('[data-fnk="copy"]');
@@ -535,11 +734,24 @@
 
     if (statusEl) statusEl.textContent = message;
     if (hintEl) {
-      hintEl.textContent = postHint
-        ? `Target: ${postHint}`
-        : "Ikon N di bar Like · klik = proses · klik lagi = copy";
+      // Sembunyikan detail teknis (mode/template engine) saat run selesai;
+      // baris status sudah menjelaskan hasilnya.
+      const terminal = ["done", "partial", "stopped", "error"].includes(status);
+      hintEl.textContent = terminal
+        ? ""
+        : postHint
+          ? `Target: ${postHint}`
+          : "Tombol N (pojok kanan) atau ikon di bar Like = buka panel";
     }
     if (countEl) countEl.textContent = names.length ? `${names.length} nama` : "0 nama";
+    if (badgeEl) {
+      const ready = fbGraphqlReady();
+      badgeEl.textContent = ready
+        ? "API komentar: siap"
+        : "API komentar: belum — buka permalink post";
+      badgeEl.classList.toggle("fnk-ok", ready);
+      badgeEl.classList.toggle("fnk-warn", !ready);
+    }
     if (replies) replies.checked = includeReplies;
 
     const running = status === "running";
@@ -553,7 +765,7 @@
       copyBtn.textContent = names.length ? `Copy nama (${names.length})` : "Copy nama";
     }
 
-    // Action-bar icon state
+    // Action-bar icon state (chip = pintu panel, seragam dengan FAB)
     const chip = document.getElementById("fnk-inline");
     if (chip) {
       const btn = chip.querySelector(".fnk-action-icon");
@@ -567,14 +779,17 @@
       );
       if (btn) {
         if (running) {
-          btn.title = "Stop ambil nama";
-          btn.setAttribute("aria-label", "Stop ambil nama");
+          btn.title = "Proses berjalan — buka panel untuk Stop";
+          btn.setAttribute("aria-label", "Proses sedang berjalan");
         } else if (names.length > 0) {
-          btn.title = `Copy ${names.length} nama (klik kanan: panel)`;
-          btn.setAttribute("aria-label", `Copy ${names.length} nama`);
+          btn.title = `Buka panel — ${names.length} nama terkumpul`;
+          btn.setAttribute(
+            "aria-label",
+            `Buka panel Nama Komentar (${names.length} nama)`
+          );
         } else {
-          btn.title = "Ambil nama komentar";
-          btn.setAttribute("aria-label", "Ambil nama komentar");
+          btn.title = "Buka panel Nama Komentar";
+          btn.setAttribute("aria-label", "Buka panel Nama Komentar");
         }
       }
       if (badge) {
@@ -590,6 +805,27 @@
         }
       }
     }
+
+    // FAB (model interaksi seragam dengan TikTok/Instagram): badge jumlah,
+    // pulse saat running, warna done saat ada hasil — klik membuka panel.
+    const fab = ui.querySelector('[data-fnk="fab"]');
+    if (fab) {
+      fab.setAttribute("data-count", names.length > 0 ? String(names.length) : "");
+      fab.classList.toggle("fnk-running", running);
+      fab.classList.toggle(
+        "fnk-done",
+        (status === "done" || status === "partial" || status === "stopped") &&
+          names.length > 0
+      );
+      // Title/aria dinamis mengikuti state (chip bar Like sudah melakukannya).
+      const fabTitle = running
+        ? "Proses berjalan — buka panel untuk Stop"
+        : names.length > 0
+          ? `Buka panel — ${names.length} nama terkumpul`
+          : "Nama Komentar";
+      fab.title = fabTitle;
+      fab.setAttribute("aria-label", fabTitle);
+    }
   }
 
   function placeUi() {
@@ -601,6 +837,8 @@
   function mapDoneStatus(stopReason, count) {
     if (stopReason === "stopped") return "stopped";
     if (stopReason === "timeout") return "partial";
+    if (stopReason === "rate_limit") return count ? "partial" : "error";
+    if (stopReason === "no_login") return "error";
     if (stopReason === "error") return "error";
     if (stopReason === "complete") return count ? "done" : "error";
     if (stopReason === "idle") return count ? "done" : "error";
@@ -661,30 +899,16 @@
       const stopReason =
         typeof data.stopReason === "string" ? data.stopReason : "complete";
       const st = mapDoneStatus(stopReason, list.length);
-      const localMsg = (() => {
-        const c = list.length;
-        if (stopReason === "stopped")
-          return c
-            ? `Dihentikan — ${c} nama. Klik Copy.`
-            : "Dihentikan — belum ada nama.";
-        if (stopReason === "timeout")
-          return c
-            ? `Waktu habis — ${c} nama (mungkin belum semua). Klik Copy.`
-            : "Waktu habis — belum ada nama.";
-        if (stopReason === "complete" || stopReason === "idle")
-          return c
-            ? `Selesai — ${c} nama. Klik Copy.`
-            : "Tidak ada nama. Buka permalink, buka komentar sampai list kelihatan, tunggu 2–3 dtk, Proses lagi.";
-        return c ? `${c} nama` : "Selesai.";
-      })();
-      const mode =
-        data.postHint && !/Tip:/i.test(data.postHint)
-          ? ` [${String(data.postHint).split(" ")[0]}]`
-          : "";
-      const finalMsg =
+      // Pesan akhir via helper tunggal (DONEMSG) — konsisten dengan popup &
+      // platform lain. Suffix [graphql]/[dom] dihapus (mode tetap terlihat
+      // di baris "Target:").
+      const tip =
         !list.length && data.postHint && /Tip:/i.test(data.postHint)
-          ? `Tidak ada nama. ${data.postHint.replace(/^[\s\S]*?Tip:/i, "Tip:")}`
-          : localMsg + (list.length ? mode : "");
+          ? data.postHint.replace(/^[\s\S]*?Tip:/i, "Tip:")
+          : "";
+      const finalMsg = doneMessage(stopReason, list.length, "facebook", {
+        tip,
+      });
       setLocalState({
         status: st,
         names: list,
@@ -692,6 +916,11 @@
         postHint:
           typeof data.postHint === "string" ? data.postHint : postHint,
       });
+      // Default visibility = expanded saat ada hasil (sama dengan TT/IG) —
+      // run dari popup/shortcut ikut menampilkan hasilnya di panel.
+      if (list.length > 0 && !userCollapsed && ui) {
+        ui.classList.remove("fnk-collapsed");
+      }
       sendBg("NAMES_DONE", {
         names: list,
         stopReason,
@@ -744,45 +973,106 @@
 
   function boot() {
     placeUi();
+    // Default visibility: expanded saat ada hasil tersimpan (sama dengan
+    // TikTok/Instagram) — pulihkan hasil lintas reload & buka panel.
+    sendBg("GET_STATE").then((res) => {
+      if (!res?.ok || !res?.state) return;
+      const st = res.state;
+      const saved = Array.isArray(st.names) ? st.names : [];
+      if (saved.length > 0 && st.status !== "running") {
+        setLocalState({
+          status: st.status === "idle" ? "done" : st.status,
+          names: saved,
+          message:
+            typeof st.message === "string"
+              ? st.message
+              : `Hasil tersimpan — ${saved.length} nama. Klik Copy.`,
+          postHint: typeof st.postHint === "string" ? st.postHint : "",
+        });
+        if (ui) {
+          ui.classList.remove("fnk-collapsed");
+          userCollapsed = false;
+        }
+      }
+    });
     sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
       if (r?.ok) engineReady = true;
     });
 
     let lastHref = location.href;
-    setInterval(() => {
-      if (location.href !== lastHref) {
-        lastHref = location.href;
-        if (stopFinalizeTimer) {
-          clearTimeout(stopFinalizeTimer);
-          stopFinalizeTimer = null;
-        }
-        engineCmd("STOP");
-        engineReady = false;
-        currentRunId = null;
-        setLocalState({
+    let navTimer = null;
+
+    function onNavigation() {
+      if (location.href === lastHref) return;
+      lastHref = location.href;
+      if (stopFinalizeTimer) {
+        clearTimeout(stopFinalizeTimer);
+        stopFinalizeTimer = null;
+      }
+      engineCmd("STOP");
+      engineReady = false;
+      currentRunId = null;
+      setLocalState({
+        status: "idle",
+        names: [],
+        message: "Halaman berubah. Klik Proses di postingan ini.",
+        postHint: "",
+      });
+      sendBg("SET_STATE", {
+        patch: {
           status: "idle",
           names: [],
+          count: 0,
           message: "Halaman berubah. Klik Proses di postingan ini.",
+          stopReason: null,
           postHint: "",
-        });
-        sendBg("SET_STATE", {
-          patch: {
-            status: "idle",
-            names: [],
-            count: 0,
-            message: "Halaman berubah. Klik Proses di postingan ini.",
-            stopReason: null,
-            postHint: "",
-            runId: null,
-          },
-        });
-        sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
-          if (r?.ok) engineReady = true;
-        });
-      }
-      if (!document.getElementById(ROOT_ID)) placeUi();
-      else placeInlineBar();
-    }, 1600);
+          runId: null,
+        },
+      });
+      sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
+        if (r?.ok) engineReady = true;
+      });
+    }
+
+    function scheduleNavCheck() {
+      if (navTimer) clearTimeout(navTimer);
+      navTimer = setTimeout(() => {
+        onNavigation();
+        if (!document.getElementById(ROOT_ID)) placeUi();
+        else placeInlineBar();
+      }, 300);
+    }
+
+    // SPA navigation detection — no polling:
+    // 1) DOM mutations (any route change rewrites the tree)
+    try {
+      new MutationObserver(scheduleNavCheck).observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+      });
+    } catch {
+      /* ignore */
+    }
+    // 2) history API + popstate/hashchange (route changes without DOM churn)
+    try {
+      const h = window.history;
+      const origPush = h.pushState;
+      const origReplace = h.replaceState;
+      h.pushState = function (...a) {
+        const r = origPush.apply(this, a);
+        scheduleNavCheck();
+        return r;
+      };
+      h.replaceState = function (...a) {
+        const r = origReplace.apply(this, a);
+        scheduleNavCheck();
+        return r;
+      };
+    } catch {
+      /* ignore */
+    }
+    window.addEventListener("popstate", scheduleNavCheck);
+    window.addEventListener("hashchange", scheduleNavCheck);
   }
 
   // document_start may run before body exists

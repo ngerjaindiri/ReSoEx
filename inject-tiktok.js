@@ -22,6 +22,8 @@
   let includeReplies = false;
   let activeAwemeId = null;
   let currentRunId = null;
+  /** Total API requests this run (budget guard against runaway pagination) */
+  let requestBudget = 0;
 
   /** Data-plane only. Control plane is ENGINE_CMD via executeScript. */
   function post(type, payload = {}) {
@@ -31,7 +33,8 @@
     );
   }
 
-  function normalizeName(raw) {
+  // BEGIN-RESO-NORMALIZE
+  function normalizeNickname(raw) {
     if (typeof raw !== "string") return "";
     let name = raw
       .replace(/\u200b|\u200c|\u200d|\ufeff/g, "")
@@ -46,17 +49,24 @@
     if (/\b(wa\.me|bit\.ly|t\.co)\b/i.test(name)) return "";
     if (/^[a-z0-9][-a-z0-9]*\.[a-z]{2,6}\//i.test(name)) return "";
     const blocked = [
-      /^tiktok$/i, /^follow$/i, /^following$/i, /^followers$/i,
-      /^ikuti$/i, /^like\b/i, /^reply\b/i, /^share\b/i,
-      /^comment\b/i, /^suka$/i, /^balas$/i, /^bagikan$/i,
-      /^komentar$/i, /^send\b/i, /^kirim$/i,
+      /^view\b/i, /^see\b/i, /^like\b/i, /^likes$/i, /^reply\b/i, /^share\b/i,
+      /^comment\b/i, /^write\b/i, /^log\s*in/i, /^sign\s*up/i, /^facebook$/i,
+      /^meta$/i, /^suka$/i, /^balas$/i, /^bagikan$/i, /^komentar$/i, /^tulis/i,
+      /^lihat/i, /^tampilkan/i, /^semua$/i, /^most relevant$/i, /^all comments$/i,
+      /^newest$/i, /^terbaru$/i, /^paling relevan$/i, /^edited$/i, /^sponsor/i,
+      /^follow$/i, /^following$/i, /^followers$/i, /^ikuti$/i, /^send\b/i,
+      /^kirim$/i, /^hide\b/i, /^open\b/i, /^photo$/i, /^video$/i, /^reels?$/i,
+      /^add a comment/i, /^tulis komentar/i, /^write a comment/i,
+      /^see more$/i, /^lihat selengkapnya$/i,
+      /^tiktok$/i,
     ];
     if (blocked.some((re) => re.test(name))) return "";
     return name;
   }
+  // END-RESO-NORMALIZE
 
   function addName(raw) {
-    const name = normalizeName(raw);
+    const name = normalizeNickname(raw);
     if (!name) return false;
     const key = name.toLowerCase();
     if (nameMap.has(key)) return false;
@@ -288,24 +298,101 @@
   }
 
   async function fetchJson(url) {
-    const res = await fetch(url, {
-      credentials: "include",
-      headers: {
-        Accept: "application/json, text/plain, */*",
-      },
-    });
+    requestBudget += 1;
+    let res;
+    try {
+      res = await fetch(url, {
+        credentials: "include",
+        headers: {
+          Accept: "application/json, text/plain, */*",
+        },
+      });
+    } catch (err) {
+      const e = new Error("Jaringan terganggu — coba lagi.");
+      e.kind = "network";
+      throw e;
+    }
     const text = await res.text();
     if (!res.ok) {
+      if (res.status === 429) {
+        const ra = Number(res.headers.get("retry-after"));
+        const e = new Error(
+          "Rate limit TikTok (HTTP 429) — jeda sejenak lalu coba lagi."
+        );
+        e.kind = "rate_limit";
+        e.retryAfter = Number.isFinite(ra) && ra > 0 ? ra : null;
+        throw e;
+      }
+      if (res.status === 401) {
+        const e = new Error("Sesi TikTok tidak aktif — login lalu Proses lagi.");
+        e.kind = "no_login";
+        throw e;
+      }
       throw new Error(`API ${res.status}: ${text.slice(0, 180)}`);
     }
     try {
       return JSON.parse(text);
     } catch {
-      throw new Error(`Respons bukan JSON: ${text.slice(0, 120)}`);
+      const e = new Error(`Respons bukan JSON: ${text.slice(0, 120)}`);
+      e.kind = "parse";
+      throw e;
+    }
+  }
+
+  /**
+   * fetchJson dengan ketahanan: backoff adaptif 429 (hormati Retry-After,
+   * eskalasi 8s → 16s, maks 2 retry, hanya jika sisa waktu cukup), retry cepat
+   * untuk blip jaringan, heartbeat PROGRESS selama menunggu. Error
+   * rate_limit/no_login diteruskan agar run berhenti aman.
+   */
+  async function fetchJsonWithBackoff(url, deadline) {
+    let attempt = 0;
+    for (;;) {
+      try {
+        return await fetchJson(url);
+      } catch (err) {
+        const kind = err && err.kind;
+        if (kind === "no_login") throw err;
+        if (kind === "rate_limit") {
+          const ra = err.retryAfter;
+          const waitMs =
+            ra && ra > 0
+              ? Math.min(ra, 20) * 1000
+              : attempt === 0
+                ? 8000
+                : 16000;
+          if (attempt >= 2 || Date.now() + waitMs > deadline) throw err;
+          attempt++;
+          post("PROGRESS", {
+            names: snapshot(),
+            message: `Rate limit (429) — jeda ${Math.round(waitMs / 1000)} dtk…`,
+            videoHint: activeAwemeId,
+          });
+          if (!(await sleepWhile(waitMs))) throw err;
+          continue;
+        }
+        if (kind === "network" && attempt === 0) {
+          attempt++;
+          if (Date.now() + 1500 > deadline) throw err;
+          await sleepWhile(1200);
+          continue;
+        }
+        throw err;
+      }
     }
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+  /** Sleep interruptible — resolve false kalau Stop ditekan (cek tiap 200 ms). */
+  async function sleepWhile(ms) {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (stopFlag) return false;
+      await sleep(Math.min(200, Math.max(20, end - Date.now())));
+    }
+    return true;
+  }
 
   function scrapeDomNicknames() {
     // Fallback: visible comment author names in DOM
@@ -327,27 +414,55 @@
     return added;
   }
 
+  function commentPanelOpen() {
+    return !!document.querySelector(
+      '[data-e2e="comment-list"], [data-e2e="comment-container"], [class*="CommentList"]'
+    );
+  }
+
+  /**
+   * Open the comment panel automatically (so the comment/list API fires and
+   * the background can capture the URL template) — no manual click needed.
+   */
   async function tryOpenComments() {
+    // Already open — nothing to do (keep it scrolled down for lazy batches)
+    if (commentPanelOpen()) {
+      try {
+        const list = document.querySelector(
+          '[data-e2e="comment-list"], [class*="CommentList"]'
+        );
+        if (list) list.scrollTop = list.scrollHeight;
+      } catch {
+        /* ignore */
+      }
+      return true;
+    }
     const candidates = [
       '[data-e2e="comment-icon"]',
       '[data-e2e="browse-comment-icon"]',
+      '[data-e2e="comment-count"]',
       'button[aria-label*="comment" i]',
       'button[aria-label*="komentar" i]',
       'span[data-e2e="comment-icon"]',
+      'button[data-e2e*="comment" i]',
+      '[data-e2e="comment-item"]',
+      'a[href*="comment"]',
     ];
     for (const sel of candidates) {
-      const el = document.querySelector(sel);
-      if (el) {
+      const els = document.querySelectorAll(sel);
+      for (const el of els) {
+        // Click the interactive ancestor, not an inert SVG/text node
+        const target =
+          el.closest("button, a, [role='button'], [data-e2e]") || el;
         try {
-          el.click();
-          await sleep(600);
-          return true;
+          target.click();
+          await sleepWhile(500);
+          if (commentPanelOpen()) return true;
         } catch {
-          /* ignore */
+          /* try next candidate */
         }
       }
     }
-    // Scroll comment list if present
     const list = document.querySelector(
       '[data-e2e="comment-list"], [class*="CommentList"]'
     );
@@ -358,15 +473,20 @@
         /* ignore */
       }
     }
-    return false;
+    return commentPanelOpen();
   }
 
   async function paginateList(templateUrl, awemeId, maxMs) {
     const start = Date.now();
+    const deadline = start + maxMs;
     let cursor = 0;
     let idle = 0;
+    let emptyPages = 0;
     let pages = 0;
     let reason = "idle";
+    const REPLY_BUDGET = 40;
+    let replyRequests = 0;
+    let replyFailStreak = 0;
 
     while (running && !stopFlag && Date.now() - start < maxMs) {
       const before = nameMap.size;
@@ -382,22 +502,25 @@
 
       let page;
       try {
-        const data = await fetchJson(url);
+        const data = await fetchJsonWithBackoff(url, deadline);
         page = parsePage(data);
       } catch (err) {
+        const kind = err && err.kind;
+        // Rate limit / sesi tidak aktif = hentikan run aman, jangan hammer
+        if (kind === "rate_limit") return "rate_limit";
+        if (kind === "no_login") return "no_login";
         // One soft retry after opening comments
         if (pages === 0) {
           await tryOpenComments();
-          await sleep(800);
+          await sleepWhile(800);
           try {
-            const data = await fetchJson(url);
+            const data = await fetchJsonWithBackoff(url, deadline);
             page = parsePage(data);
           } catch (err2) {
-            post("ERROR", {
-              message: String(err2?.message || err2),
-              stopReason: "error",
-            });
-            return "error";
+            const k2 = err2 && err2.kind;
+            if (k2 === "rate_limit") return "rate_limit";
+            if (k2 === "no_login") return "no_login";
+            return nameMap.size ? "timeout" : "error";
           }
         } else {
           // stop with partial
@@ -407,6 +530,10 @@
       }
 
       pages++;
+      if (requestBudget >= 350) {
+        reason = "timeout";
+        break;
+      }
       scrapeDomNicknames();
       post("PROGRESS", {
         names: snapshot(),
@@ -414,14 +541,16 @@
         videoHint: awemeId,
       });
 
-      // Optional replies for this page's parents
+      // Optional replies for this page's parents — budget terpisah 40 request/run
       if (includeReplies && page.replyTargets?.length) {
-        for (const t of page.replyTargets.slice(0, 30)) {
+        for (const t of page.replyTargets) {
           if (stopFlag) break;
+          if (replyRequests >= REPLY_BUDGET) break;
           let rCursor = 0;
           let rGuard = 0;
-          while (rGuard < 15 && !stopFlag) {
+          while (rGuard < 8 && !stopFlag) {
             rGuard++;
+            if (replyRequests >= REPLY_BUDGET || requestBudget >= 350) break;
             const rUrl = buildUrl(templateUrl, {
               cursor: rCursor,
               awemeId,
@@ -429,7 +558,9 @@
               commentId: t.commentId,
             });
             try {
-              const rData = await fetchJson(rUrl);
+              const rData = await fetchJsonWithBackoff(rUrl, deadline);
+              replyRequests++;
+              replyFailStreak = 0;
               const rp = parsePage(rData);
               post("PROGRESS", {
                 names: snapshot(),
@@ -439,12 +570,17 @@
               if (!rp.hasMore) break;
               rCursor =
                 rp.cursor != null ? rp.cursor : rCursor + (rp.batchSize || 20);
-            } catch {
-              break;
+            } catch (err) {
+              const kind = err && err.kind;
+              // 429 / sesi tidak aktif di balasan = hentikan seluruh run
+              if (kind === "rate_limit") return "rate_limit";
+              if (kind === "no_login") return "no_login";
+              replyFailStreak++;
+              if (replyFailStreak >= 2) break;
             }
-            await sleep(400 + Math.random() * 400);
+            if (!(await sleepWhile(400 + Math.random() * 400))) break;
           }
-          await sleep(300 + Math.random() * 400);
+          if (!(await sleepWhile(300 + Math.random() * 400))) break;
         }
       }
 
@@ -452,10 +588,22 @@
       else idle = 0;
       if (Date.now() - lastNewAt < 2500) idle = Math.max(0, idle - 1);
 
-      if (!page.hasMore || page.batchSize === 0) {
+      if (page.hasMore === false) {
         reason = "complete";
         break;
       }
+      // Halaman kosong di tengah pagination — retry cursor sama 2× sebelum
+      // menyerah (jangan pernah dinyatakan "complete" padahal belum selesai)
+      if (page.batchSize === 0) {
+        emptyPages++;
+        if (emptyPages <= 2 && Date.now() - start < maxMs - 3000) {
+          await sleepWhile(700 + Math.random() * 500);
+          continue;
+        }
+        reason = nameMap.size ? "idle" : "error";
+        break;
+      }
+      emptyPages = 0;
       if (idle >= 4) {
         reason = "idle";
         break;
@@ -467,7 +615,10 @@
           : cursor + (page.batchSize || 20);
 
       // polite delay
-      await sleep(700 + Math.random() * 900);
+      if (!(await sleepWhile(700 + Math.random() * 900))) {
+        reason = "stopped";
+        break;
+      }
     }
 
     if (stopFlag) reason = "stopped";
@@ -494,6 +645,7 @@
     includeReplies = options.includeReplies === true;
     activeAwemeId = options.awemeId || extractAwemeId(location.href);
     lastNewAt = Date.now();
+    requestBudget = 0;
 
     post("PROGRESS", {
       names: [],
@@ -515,9 +667,12 @@
         return;
       }
 
-      await tryOpenComments();
+      for (let i = 0; i < 3; i++) {
+        if (await tryOpenComments()) break;
+        if (!(await sleepWhile(700))) break;
+      }
       scrapeDomNicknames();
-      await sleep(500);
+      await sleepWhile(500);
 
       let templateUrl = options.templateUrl || engineTemplateUrl || null;
 
@@ -525,14 +680,15 @@
       if (!templateUrl) {
         post("NEED_TEMPLATE", { awemeId: activeAwemeId });
         for (let i = 0; i < 24 && !stopFlag; i++) {
-          await sleep(250);
+          if (!(await sleepWhile(250))) break;
           scrapeDomNicknames();
           templateUrl = engineTemplateUrl || null;
           if (templateUrl) break;
           if (i % 4 === 3) {
+            await tryOpenComments();
             post("PROGRESS", {
               names: snapshot(),
-              message: "Menunggu API komentar… buka/scroll panel komentar",
+              message: "Menunggu API komentar… membuka panel komentar",
               videoHint: activeAwemeId,
             });
           }
@@ -548,7 +704,10 @@
         });
         const start = Date.now();
         let idle = 0;
+        let loopCount = 0;
         while (running && !stopFlag && Date.now() - start < 45000) {
+          loopCount++;
+          if (loopCount % 5 === 0) await tryOpenComments();
           const before = nameMap.size;
           scrapeDomNicknames();
           const list = document.querySelector(
@@ -571,7 +730,7 @@
           if (nameMap.size === before) idle++;
           else idle = 0;
           if (idle >= 10 && nameMap.size > 0) break;
-          await sleep(800);
+          if (!(await sleepWhile(800))) break;
         }
         if (stillMine()) {
           const names = snapshot();
