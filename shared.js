@@ -344,6 +344,124 @@ function doneMessage(reason, count, platform, options) {
 }
 // END-RESO-DONEMSG
 
+// BEGIN-RESO-PARSERS
+/**
+ * SINGLE SOURCE OF TRUTH untuk parsing payload komentar — dipakai engine
+ * MAIN-world (inject-fb.js / inject-tiktok.js / inject-ig.js) lewat salinan
+ * byte-identik di dalam marker yang sama — dijamin fixture test PARSERS.
+ * Semua fungsi murni: hanya memetakan payload JSON/teks ke daftar nama
+ * (tanpa normalisasi/dedupe — pemanggil yang menormalkan).
+ */
+
+/** TikTok: nickname dari payload comment/list (jalur array + fallback walk). */
+function parseTikTokComments(data, includeReplies) {
+  const out = [];
+  const arrays = [];
+  if (Array.isArray(data?.comments)) arrays.push(data.comments);
+  if (Array.isArray(data?.data?.comments)) arrays.push(data.data.comments);
+  if (Array.isArray(data?.comments?.list)) arrays.push(data.comments.list);
+
+  const takeUser = (user) => {
+    if (!user || typeof user !== "object") return;
+    const nick = user.nickname || user.nickName;
+    if (typeof nick === "string") out.push(nick);
+  };
+
+  if (arrays.length) {
+    for (const comments of arrays) {
+      for (const c of comments) {
+        if (!c || typeof c !== "object") continue;
+        takeUser(c.user);
+        if (typeof c.nickname === "string") out.push(c.nickname);
+        // Hanya balasan tertanam saat user memilih ikut sertakan
+        if (includeReplies) {
+          const replies = c.reply_comment || c.reply_comments || c.comments;
+          if (Array.isArray(replies)) {
+            for (const r of replies) takeUser(r?.user);
+          }
+        }
+      }
+    }
+    return out;
+  }
+
+  // Fallback: hanya node berbentuk komentar (hindari pohon balasan dalam saat nonaktif)
+  const walk = (v, depth = 0) => {
+    if (depth > 28 || v == null) return;
+    if (Array.isArray(v)) {
+      for (const item of v) walk(item, depth + 1);
+      return;
+    }
+    if (typeof v !== "object") return;
+    const looksComment =
+      v.user &&
+      (v.cid != null ||
+        v.comment_id != null ||
+        v.text != null ||
+        v.create_time != null ||
+        v.digg_count != null);
+    if (looksComment) takeUser(v.user);
+    for (const k of Object.keys(v)) {
+      if (
+        !includeReplies &&
+        (k === "reply_comment" || k === "reply_comments")
+      ) {
+        continue;
+      }
+      walk(v[k], depth + 1);
+    }
+  };
+  walk(data, 0);
+  return out;
+}
+
+/** Instagram: username dari payload comments (top-level). */
+function parseIgComments(data) {
+  const out = [];
+  const comments = Array.isArray(data?.comments) ? data.comments : [];
+  for (const c of comments) {
+    if (!c || typeof c !== "object") continue;
+    const u = c?.user?.username || "";
+    if (u) out.push(u);
+  }
+  return out;
+}
+
+/** Facebook: nama dari teks GraphQL (pola regex — cermin extractNamesFromText). */
+function extractGraphqlNames(text) {
+  const out = [];
+  if (!text || typeof text !== "string") return out;
+  const patterns = [
+    /"__typename"\s*:\s*"Comment"[\s\S]{0,1500}?"author"\s*:\s*\{[\s\S]{0,600}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+    /"author"\s*:\s*\{[\s\S]{0,400}?"__typename"\s*:\s*"User"[\s\S]{0,300}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+    /"author"\s*:\s*\{[\s\S]{0,300}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"[\s\S]{0,300}?"__typename"\s*:\s*"User"/g,
+    /"created_time"\s*:\s*\d+[\s\S]{0,500}?"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+    /"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"[\s\S]{0,500}?"created_time"\s*:\s*\d+/g,
+    /"body"\s*:\s*\{[^}]{0,200}"text"\s*:\s*"[^"]{0,500}"[\s\S]{0,400}?"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+  ];
+  const seen = new Set();
+  for (const re of patterns) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text))) {
+      let name;
+      try {
+        name = JSON.parse(`"${m[1]}"`);
+      } catch {
+        name = m[1];
+      }
+      if (typeof name === "string" && name && !seen.has(name.toLowerCase())) {
+        seen.add(name.toLowerCase());
+        out.push(name);
+      }
+    }
+  }
+  return out;
+}
+// END-RESO-PARSERS
+
+export { parseTikTokComments, parseIgComments, extractGraphqlNames };
+
 /** Kata untuk hasil per platform — Instagram = username, lainnya = nama. */
 export function wordFor(platform) {
   return platform === "instagram" ? "username" : "nama";
@@ -385,16 +503,56 @@ export function namesToClipboardText(names, platform) {
     .join("\n");
 }
 
+// BEGIN-RESO-PANELTOOLS
 /**
- * Gabung nama dari beberapa platform sekaligus — tiap nama dinormalisasi
- * dengan aturan platform-nya SENDIRI (FB/TT/IG berbeda), lalu di-dedupe
+ * SINGLE SOURCE OF TRUTH untuk perkakas UI daftar nama — dipakai popup
+ * (via export) dan ketiga panel (content-*.js) lewat salinan byte-identik
+ * di dalam marker yang sama — dijamin fixture test PANELTOOLS.
+ */
+
+/** Saring nama (case-insensitive substring). */
+function filterNames(names, query) {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return names || [];
+  return (names || []).filter((n) => String(n).toLowerCase().includes(q));
+}
+
+/** Urutkan A–Z (locale id); false = urutan asli. */
+function sortNamesAz(names) {
+  return [...(names || [])].sort((a, b) =>
+    String(a).localeCompare(String(b), "id")
+  );
+}
+
+/** Isi file CSV: BOM UTF-8 + header platform-aware + 1 nama/baris. */
+function csvContent(names, isIg) {
+  const header = isIg ? "Username" : "Nama";
+  return "\uFEFF" + header + "\n" + (names || []).join("\n");
+}
+
+/** Unduh file teks via blob (berfungsi di popup & content script). */
+function downloadTextFile(filename, text, mime) {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+/**
+ * Gabung nama dari beberapa platform — tiap nama dinormalisasi dengan
+ * aturan platform-nya SENDIRI (FB/TT/IG berbeda), lalu di-dedupe
  * case-insensitive. Menghindari data loss saat normalisasi lintas platform
  * (mis. @handle & emoji TikTok, atau nama FB yang mengandung spasi yang
  * ditolak aturan username Instagram).
  * @param {{platform: "facebook"|"tiktok"|"instagram", names: string[]}[]} groups
  * @returns {string[]}
  */
-export function mergeAcrossPlatforms(groups) {
+function mergeAcrossPlatforms(groups) {
   const map = new Map();
   for (const g of groups || []) {
     const platform =
@@ -408,6 +566,15 @@ export function mergeAcrossPlatforms(groups) {
   }
   return [...map.values()];
 }
+// END-RESO-PANELTOOLS
+
+export {
+  mergeAcrossPlatforms,
+  filterNames,
+  sortNamesAz,
+  csvContent,
+  downloadTextFile,
+};
 
 // ===================== Run ID =====================
 

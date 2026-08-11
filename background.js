@@ -15,6 +15,7 @@ import {
   defaultStateFor,
   applyStatePatch,
   mergeNames,
+  mergeAcrossPlatforms,
   reasonToMessage,
   isFacebookUrl,
   isTikTokUrl,
@@ -671,6 +672,32 @@ async function handleMessage(msg, sender) {
         "instagram"
       );
       return { ok: true, facebook, tiktok, instagram };
+    }
+
+    case "MERGE_ALL": {
+      // Merge dijalankan di background karena shared.js (single source of
+      // truth) yang punya ketiga normalizer platform — content scripts hanya
+      // membawa normalizer platform-nya sendiri, jadi merge lintas platform
+      // TIDAK boleh dijalankan di halaman (bukan hanya duplikasi, tapi juga
+      // bakal ReferenceError). Panel/popup tinggal pakai hasilnya.
+      const facebook = await restoreSavedIfIdle(
+        await getState("facebook"),
+        "facebook"
+      );
+      const tiktok = await restoreSavedIfIdle(
+        await getState("tiktok"),
+        "tiktok"
+      );
+      const instagram = await restoreSavedIfIdle(
+        await getState("instagram"),
+        "instagram"
+      );
+      const merged = mergeAcrossPlatforms([
+        { platform: "facebook", names: facebook.names || [] },
+        { platform: "tiktok", names: tiktok.names || [] },
+        { platform: "instagram", names: instagram.names || [] },
+      ]);
+      return { ok: true, names: merged };
     }
 
     case "CHECK_IG_LOGIN": {

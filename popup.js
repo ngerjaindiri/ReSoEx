@@ -6,6 +6,10 @@ import {
   namesToClipboardText,
   detectPlatform,
   mergeAcrossPlatforms,
+  filterNames,
+  sortNamesAz,
+  csvContent,
+  downloadTextFile,
   isFacebookPostPage,
   wordFor,
   SAVED_KEY,
@@ -54,10 +58,8 @@ let query = "";
 let sortAz = false;
 
 function visibleNames(names) {
-  let out = names || [];
-  const q = query.trim().toLowerCase();
-  if (q) out = out.filter((n) => String(n).toLowerCase().includes(q));
-  if (sortAz) out = [...out].sort((a, b) => String(a).localeCompare(String(b), "id"));
+  let out = filterNames(names, query);
+  if (sortAz) out = sortNamesAz(out);
   return out;
 }
 
@@ -368,28 +370,19 @@ btnReset.addEventListener("click", async () => {
   render(res?.state, currentPlatform ?? res?.platform);
 });
 
-function downloadFile(text, filename, mime) {
-  const blob = new Blob([text], { type: mime });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
-}
-
 btnCsv.addEventListener("click", async () => {
   const res = await getState();
   const names = visibleNames(res?.state?.names || []);
   if (!names.length) return;
   const date = new Date().toISOString().slice(0, 10);
   const isIg = res?.platform === "instagram";
-  const header = isIg ? "Username" : "Nama";
   const stem = isIg ? "username" : "nama";
-  // \uFEFF (BOM) agar Excel membaca UTF-8 dengan benar
-  downloadFile("\uFEFF" + header + "\n" + names.join("\n"), `reso-${stem}-${date}.csv`, "text/csv;charset=utf-8");
+  // csvContent: \uFEFF (BOM) agar Excel membaca UTF-8 dengan benar
+  downloadTextFile(
+    `reso-${stem}-${date}.csv`,
+    csvContent(names, isIg),
+    "text/csv;charset=utf-8"
+  );
   statusEl.textContent = `CSV tersimpan: ${names.length} ${wordFor(res?.platform || currentPlatform)}.`;
 });
 
@@ -408,9 +401,9 @@ btnBackup.addEventListener("click", async () => {
   try {
     const data = await chrome.storage.local.get([SAVED_KEY, PREFS_KEY]);
     const date = new Date().toISOString().slice(0, 10);
-    downloadFile(
-      JSON.stringify(data, null, 2),
+    downloadTextFile(
       `reso-backup-${date}.json`,
+      JSON.stringify(data, null, 2),
       "application/json"
     );
     statusEl.textContent = "Backup tersimpan (JSON).";

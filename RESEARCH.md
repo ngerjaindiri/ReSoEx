@@ -261,10 +261,10 @@ Kritik mendalam 2026-08-11 (dari audit menyeluruh seksi 8.2 + verifikasi kode):
 - **A3/A4/A5 — kopi basi:** hint FB, steps popup FB, pesan "ikon extension". **✅ Fixed v1.0.20.**
 - **B1–B5 — terminologi:** "Sertakan balasan (reply)", "copy ke Excel", placeholder search platform-aware, nama file CSV, warna badge FAB. **✅ Fixed v1.0.20** (B5: IG #262626→#161823).
 - **E1 — aksesibilitas:** tidak ada `prefers-reduced-motion` di 5 stylesheet. **✅ Fixed v1.0.20** — di halaman host di-scope ke `#xxx-root` agar tidak menyentuh animasi platform.
-- **C1 — gap fitur panel vs popup** (search/CSV/merge/backup hanya di popup): belum — v1.1+.
+- **C1 — gap fitur panel vs popup** (search/sort/CSV/merge hanya di popup): **✅ Fixed v1.0.26** — parity penuh: tiap panel FB/TT/IG kini punya search live, Urutkan A–Z, preview daftar (maks 40), CSV platform-aware, dan Gabung (via `MERGE_ALL` di background — content script hanya membawa normalizer platform-nya sendiri, jadi merge lintas platform harus jalan di shared/background). Copy/CSV menghormati filter ("X dari N"). Backup/restore masih eksklusif popup (sengaja — ruang panel terbatas).
 - **C2 — switch (options) vs checkbox (popup/panel) untuk setting sama:** belum — sengaja (language kontrol berbeda per konteks), bisa dipertimbangkan di v1.1.
 - **D1 — dua sumber pesan (localDoneMessage vs reasonToMessage):** **✅ Fixed v1.0.24** — helper tunggal `doneMessage` di shared.js (blok `BEGIN-RESO-DONEMSG`, 4 salinan dijamin fixture test): `reasonToMessage` delegasi; ketiga panel + jalur stop-finalize memakai helper. Drift tertutup: suffix `[graphql]/[dom]` FB dihapus (mode tetap di baris "Target:"), checkpoint IG kini menyertakan count, timeout seragam "Klik Copy", wording rate-limit platform-aware, `wordFor` diekspor (popup memakai).
-- **E2 — GET_STATE hasTemplate asimetris (TT di-recompute, IG tidak):** **✅ Fixed v1.0.21** — IG kini di-recompute juga (TTL 30 mnt + shape), badge popup selalu akurat.
+- **E2 — GET_STATE hasTemplate asimetris (TT di-recompute, IG tidak):** **✅ Fixed v1.0.21** — IG kini di-recompute juga (TTL 30 mnt + shape), badge popup selalu akurat. **Panel TT/IG v1.0.27:** `storage.onChanged` mere-validasi via GET_TEMPLATE (bukan nilai mentah) dan boot menerapkan hasTemplate tanpa syarat — badge panel selalu akurat seperti popup.
 
 ---
 

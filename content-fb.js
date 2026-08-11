@@ -21,6 +21,9 @@
   let readyWaiter = null;
   /** true saat user sengaja menutup panel (min) — jangan dipaksa buka lagi */
   let userCollapsed = false;
+  /** Filter pencarian & urutan daftar nama di panel (parity popup). */
+  let query = "";
+  let sortAz = false;
 
   function sendBg(type, payload = {}) {
     try {
@@ -217,6 +220,71 @@
   }
   // END-RESO-DONEMSG
 
+  // BEGIN-RESO-PANELTOOLS
+  /**
+   * SINGLE SOURCE OF TRUTH untuk perkakas UI daftar nama — dipakai popup
+   * (via export) dan ketiga panel (content-*.js) lewat salinan byte-identik
+   * di dalam marker yang sama — dijamin fixture test PANELTOOLS.
+   */
+
+  /** Saring nama (case-insensitive substring). */
+  function filterNames(names, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return names || [];
+    return (names || []).filter((n) => String(n).toLowerCase().includes(q));
+  }
+
+  /** Urutkan A–Z (locale id); false = urutan asli. */
+  function sortNamesAz(names) {
+    return [...(names || [])].sort((a, b) =>
+      String(a).localeCompare(String(b), "id")
+    );
+  }
+
+  /** Isi file CSV: BOM UTF-8 + header platform-aware + 1 nama/baris. */
+  function csvContent(names, isIg) {
+    const header = isIg ? "Username" : "Nama";
+    return "\uFEFF" + header + "\n" + (names || []).join("\n");
+  }
+
+  /** Unduh file teks via blob (berfungsi di popup & content script). */
+  function downloadTextFile(filename, text, mime) {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  /**
+   * Gabung nama dari beberapa platform — tiap nama dinormalisasi dengan
+   * aturan platform-nya SENDIRI (FB/TT/IG berbeda), lalu di-dedupe
+   * case-insensitive. Menghindari data loss saat normalisasi lintas platform
+   * (mis. @handle & emoji TikTok, atau nama FB yang mengandung spasi yang
+   * ditolak aturan username Instagram).
+   * @param {{platform: "facebook"|"tiktok"|"instagram", names: string[]}[]} groups
+   * @returns {string[]}
+   */
+  function mergeAcrossPlatforms(groups) {
+    const map = new Map();
+    for (const g of groups || []) {
+      const platform =
+        g?.platform === "tiktok" || g?.platform === "instagram"
+          ? g.platform
+          : "facebook";
+      for (const n of g?.names || []) {
+        const k = normalizeName(n, platform);
+        if (k && !map.has(k.toLowerCase())) map.set(k.toLowerCase(), k);
+      }
+    }
+    return [...map.values()];
+  }
+  // END-RESO-PANELTOOLS
+
   function mergeNames(list) {
     const map = new Map();
     for (const n of list || []) {
@@ -224,6 +292,56 @@
       if (k && !map.has(k.toLowerCase())) map.set(k.toLowerCase(), k);
     }
     return [...map.values()];
+  }
+
+  /** Daftar nama yang terlihat — hormati filter pencarian & urutan A–Z. */
+  function visible() {
+    let out = filterNames(names, query);
+    if (sortAz) out = sortNamesAz(out);
+    return out;
+  }
+
+  function toggleSort() {
+    sortAz = !sortAz;
+    renderUi();
+  }
+
+  async function exportCsv() {
+    const vis = visible();
+    if (!vis.length) {
+      setLocalState({ message: "Belum ada nama untuk diekspor." });
+      return;
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    downloadTextFile(
+      `reso-nama-${date}.csv`,
+      csvContent(vis, false),
+      "text/csv;charset=utf-8"
+    );
+    setLocalState({ message: `CSV tersimpan: ${vis.length} nama.` });
+  }
+
+  async function mergeAll() {
+    // Merge dijalankan di background (shared.js punya ketiga normalizer
+    // platform); content script hanya membawa normalizer platform-nya sendiri.
+    const res = await sendBg("MERGE_ALL");
+    const merged = Array.isArray(res?.names) ? res.names : [];
+    if (!merged.length) {
+      setLocalState({
+        message: "Belum ada hasil di Facebook, TikTok, maupun Instagram.",
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(merged.join("\n"));
+      setLocalState({
+        message: `Gabung: ${merged.length} nama unik tersalin. Paste di Excel.`,
+      });
+    } catch {
+      setLocalState({
+        message: `Gabung: ${merged.length} nama unik. Buka hasil lalu Copy per platform.`,
+      });
+    }
   }
 
   function setLocalState(patch) {
@@ -406,7 +524,8 @@
   }
 
   async function copyNames() {
-    const text = names.join("\n");
+    const vis = visible();
+    const text = vis.join("\n");
     if (!text) {
       setLocalState({ message: "Belum ada nama untuk disalin." });
       return false;
@@ -414,7 +533,7 @@
     try {
       await navigator.clipboard.writeText(text);
       setLocalState({
-        message: `Tersalin ${names.length} nama. Paste di Excel (Ctrl+V).`,
+        message: `Tersalin ${vis.length} nama. Paste di Excel (Ctrl+V).`,
       });
       return true;
     } catch {
@@ -477,11 +596,18 @@
             <input type="checkbox" data-fnk="replies" checked />
             Sertakan balasan (reply)
           </label>
+          <div class="fnk-tools">
+            <input class="fnk-search" type="search" data-fnk="search" placeholder="Cari nama…" aria-label="Cari nama" />
+            <button type="button" class="fnk-btn fnk-sort" data-fnk="sort" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+          </div>
+          <div class="fnk-list" data-fnk="list" hidden></div>
           <div class="fnk-actions">
             <button type="button" class="fnk-btn fnk-primary" data-fnk="process" title="Mulai ambil nama">Proses</button>
             <button type="button" class="fnk-btn" data-fnk="stop" hidden title="Hentikan">Stop</button>
             <button type="button" class="fnk-btn fnk-success" data-fnk="copy" disabled title="Salin ke clipboard">Copy nama</button>
             <button type="button" class="fnk-btn fnk-ghost" data-fnk="reset" title="Bersihkan hasil & reset">Reset</button>
+            <button type="button" class="fnk-btn" data-fnk="csv" disabled title="Simpan ke file CSV (siap Excel)">CSV</button>
+            <button type="button" class="fnk-btn fnk-ghost" data-fnk="merge" title="Gabungkan nama unik FB + TikTok + IG lalu salin">Gabung</button>
           </div>
         </div>
       </div>
@@ -498,6 +624,9 @@
       if (act === "stop") stopExtract();
       if (act === "copy") copyNames();
       if (act === "reset") doReset();
+      if (act === "csv") exportCsv();
+      if (act === "merge") mergeAll();
+      if (act === "sort") toggleSort();
       if (act === "min") {
         root.classList.add("fnk-collapsed");
         userCollapsed = true;
@@ -511,6 +640,12 @@
       const t = e.target;
       if (t && t.getAttribute?.("data-fnk") === "replies") {
         includeReplies = !!t.checked;
+      }
+    });
+    root.addEventListener("input", (e) => {
+      if (e.target?.getAttribute?.("data-fnk") === "search") {
+        query = e.target.value;
+        renderUi();
       }
     });
     // Keyboard: Esc menutup panel (setara tombol min).
@@ -730,6 +865,8 @@
     const processBtn = ui.querySelector('[data-fnk="process"]');
     const stopBtn = ui.querySelector('[data-fnk="stop"]');
     const copyBtn = ui.querySelector('[data-fnk="copy"]');
+    const csvBtn = ui.querySelector('[data-fnk="csv"]');
+    const mergeBtn = ui.querySelector('[data-fnk="merge"]');
     const replies = ui.querySelector('[data-fnk="replies"]');
 
     if (statusEl) statusEl.textContent = message;
@@ -743,7 +880,16 @@
           ? `Target: ${postHint}`
           : "Tombol N (pojok kanan) atau ikon di bar Like = buka panel";
     }
-    if (countEl) countEl.textContent = names.length ? `${names.length} nama` : "0 nama";
+    // Count — saat filter aktif tampilkan "X dari N" agar jelas kenapa
+    // tombol Copy bisa nonaktif walau ada hasil.
+    const vis = visible();
+    if (countEl) {
+      countEl.textContent = query.trim()
+        ? `${vis.length} dari ${names.length} nama`
+        : names.length
+          ? `${names.length} nama`
+          : "0 nama";
+    }
     if (badgeEl) {
       const ready = fbGraphqlReady();
       badgeEl.textContent = ready
@@ -761,8 +907,26 @@
     }
     if (stopBtn) stopBtn.hidden = !running;
     if (copyBtn) {
-      copyBtn.disabled = names.length === 0;
-      copyBtn.textContent = names.length ? `Copy nama (${names.length})` : "Copy nama";
+      copyBtn.disabled = vis.length === 0;
+      copyBtn.textContent = vis.length
+        ? `Copy nama (${vis.length})`
+        : "Copy nama";
+    }
+    if (csvBtn) csvBtn.disabled = vis.length === 0;
+    if (mergeBtn) mergeBtn.disabled = false;
+
+    // Preview daftar — hormati filter & urutan (parity dengan popup).
+    const listEl = ui.querySelector('[data-fnk="list"]');
+    if (listEl) {
+      if (vis.length) {
+        listEl.hidden = false;
+        const show = vis.slice(0, 40);
+        listEl.textContent =
+          show.join("\n") + (vis.length > 40 ? `\n… +${vis.length - 40} lagi` : "");
+      } else {
+        listEl.hidden = true;
+        listEl.textContent = "";
+      }
     }
 
     // Action-bar icon state (chip = pintu panel, seragam dengan FAB)

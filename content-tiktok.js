@@ -15,6 +15,8 @@
   let videoHint = "";
   let includeReplies = false;
   let hasTemplate = false;
+  let query = "";
+  let sortAz = false;
   let engineReady = false;
   let readyWaiter = null;
   let currentRunId = null;
@@ -185,6 +187,121 @@
     return c ? `${c} ${word}` : "Siap.";
   }
   // END-RESO-DONEMSG
+
+  // BEGIN-RESO-PANELTOOLS
+  /**
+   * SINGLE SOURCE OF TRUTH untuk perkakas UI daftar nama — dipakai popup
+   * (via export) dan ketiga panel (content-*.js) lewat salinan byte-identik
+   * di dalam marker yang sama — dijamin fixture test PANELTOOLS.
+   */
+
+  /** Saring nama (case-insensitive substring). */
+  function filterNames(names, query) {
+    const q = String(query || "").trim().toLowerCase();
+    if (!q) return names || [];
+    return (names || []).filter((n) => String(n).toLowerCase().includes(q));
+  }
+
+  /** Urutkan A–Z (locale id); false = urutan asli. */
+  function sortNamesAz(names) {
+    return [...(names || [])].sort((a, b) =>
+      String(a).localeCompare(String(b), "id")
+    );
+  }
+
+  /** Isi file CSV: BOM UTF-8 + header platform-aware + 1 nama/baris. */
+  function csvContent(names, isIg) {
+    const header = isIg ? "Username" : "Nama";
+    return "\uFEFF" + header + "\n" + (names || []).join("\n");
+  }
+
+  /** Unduh file teks via blob (berfungsi di popup & content script). */
+  function downloadTextFile(filename, text, mime) {
+    const blob = new Blob([text], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  /**
+   * Gabung nama dari beberapa platform — tiap nama dinormalisasi dengan
+   * aturan platform-nya SENDIRI (FB/TT/IG berbeda), lalu di-dedupe
+   * case-insensitive. Menghindari data loss saat normalisasi lintas platform
+   * (mis. @handle & emoji TikTok, atau nama FB yang mengandung spasi yang
+   * ditolak aturan username Instagram).
+   * @param {{platform: "facebook"|"tiktok"|"instagram", names: string[]}[]} groups
+   * @returns {string[]}
+   */
+  function mergeAcrossPlatforms(groups) {
+    const map = new Map();
+    for (const g of groups || []) {
+      const platform =
+        g?.platform === "tiktok" || g?.platform === "instagram"
+          ? g.platform
+          : "facebook";
+      for (const n of g?.names || []) {
+        const k = normalizeName(n, platform);
+        if (k && !map.has(k.toLowerCase())) map.set(k.toLowerCase(), k);
+      }
+    }
+    return [...map.values()];
+  }
+  // END-RESO-PANELTOOLS
+
+  /** Daftar nama yang terlihat — hormati filter pencarian & urutan A–Z. */
+  function visible() {
+    let out = filterNames(names, query);
+    if (sortAz) out = sortNamesAz(out);
+    return out;
+  }
+
+  function toggleSort() {
+    sortAz = !sortAz;
+    render();
+  }
+
+  async function exportCsv() {
+    const vis = visible();
+    if (!vis.length) {
+      setLocal({ message: "Belum ada nama untuk diekspor." });
+      return;
+    }
+    const date = new Date().toISOString().slice(0, 10);
+    downloadTextFile(
+      `reso-nama-${date}.csv`,
+      csvContent(vis, false),
+      "text/csv;charset=utf-8"
+    );
+    setLocal({ message: `CSV tersimpan: ${vis.length} nama.` });
+  }
+
+  async function mergeAll() {
+    // Merge dijalankan di background (shared.js punya ketiga normalizer
+    // platform); content script hanya membawa normalizer platform-nya sendiri.
+    const res = await sendBg("MERGE_ALL");
+    const merged = Array.isArray(res?.names) ? res.names : [];
+    if (!merged.length) {
+      setLocal({
+        message: "Belum ada hasil di Facebook, TikTok, maupun Instagram.",
+      });
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(merged.join("\n"));
+      setLocal({
+        message: `Gabung: ${merged.length} nama unik tersalin. Paste di Excel.`,
+      });
+    } catch {
+      setLocal({
+        message: `Gabung: ${merged.length} nama unik. Buka hasil lalu Copy per platform.`,
+      });
+    }
+  }
 
   function mergeNames(list) {
     const map = new Map();
@@ -388,7 +505,8 @@
   }
 
   async function copyNames() {
-    const text = names.join("\n");
+    const vis = visible();
+    const text = vis.join("\n");
     if (!text) {
       setLocal({ message: "Belum ada nama untuk disalin." });
       return false;
@@ -396,7 +514,7 @@
     try {
       await navigator.clipboard.writeText(text);
       setLocal({
-        message: `Tersalin ${names.length} nama. Paste di Excel (Ctrl+V).`,
+        message: `Tersalin ${vis.length} nama. Paste di Excel (Ctrl+V).`,
       });
       return true;
     } catch {
@@ -407,7 +525,7 @@
       ta.select();
       try {
         document.execCommand("copy");
-        setLocal({ message: `Tersalin ${names.length} nama. Paste di Excel.` });
+        setLocal({ message: `Tersalin ${vis.length} nama. Paste di Excel.` });
         return true;
       } catch {
         setLocal({ message: "Gagal copy. Coba lagi dari panel atau popup." });
@@ -441,11 +559,18 @@
             <input type="checkbox" data-tnk="replies" />
             Sertakan balasan (reply)
           </label>
+          <div class="tnk-tools">
+            <input class="tnk-search" type="search" data-tnk="search" placeholder="Cari nama…" aria-label="Cari nama" />
+            <button type="button" class="tnk-btn tnk-sort" data-tnk="sort" title="Urutkan nama A–Z / urutan asli">Urutkan A-Z</button>
+          </div>
+          <div class="tnk-list" data-tnk="list" hidden></div>
           <div class="tnk-actions">
             <button type="button" class="tnk-btn tnk-primary" data-tnk="process" title="Mulai ambil nama">Proses</button>
             <button type="button" class="tnk-btn" data-tnk="stop" hidden title="Hentikan">Stop</button>
             <button type="button" class="tnk-btn tnk-success" data-tnk="copy" disabled title="Salin ke clipboard">Copy nama</button>
             <button type="button" class="tnk-btn tnk-ghost" data-tnk="reset" title="Bersihkan hasil & reset">Reset</button>
+            <button type="button" class="tnk-btn" data-tnk="csv" disabled title="Simpan ke file CSV (siap Excel)">CSV</button>
+            <button type="button" class="tnk-btn tnk-ghost" data-tnk="merge" title="Gabungkan nama unik FB + TikTok + IG lalu salin">Gabung</button>
           </div>
         </div>
       </div>
@@ -462,12 +587,21 @@
       if (act === "stop") stopExtract();
       if (act === "copy") copyNames();
       if (act === "reset") doReset();
+      if (act === "csv") exportCsv();
+      if (act === "merge") mergeAll();
+      if (act === "sort") toggleSort();
       if (act === "min") root.classList.add("tnk-collapsed");
       if (act === "fab") root.classList.remove("tnk-collapsed");
     });
     root.addEventListener("change", (e) => {
       if (e.target?.getAttribute?.("data-tnk") === "replies") {
         includeReplies = !!e.target.checked;
+      }
+    });
+    root.addEventListener("input", (e) => {
+      if (e.target?.getAttribute?.("data-tnk") === "search") {
+        query = e.target.value;
+        render();
       }
     });
     // Keyboard: Esc menutup panel (setara tombol min).
@@ -523,6 +657,8 @@
     const processBtn = ui.querySelector('[data-tnk="process"]');
     const stopBtn = ui.querySelector('[data-tnk="stop"]');
     const copyBtn = ui.querySelector('[data-tnk="copy"]');
+    const csvBtn = ui.querySelector('[data-tnk="csv"]');
+    const mergeBtn = ui.querySelector('[data-tnk="merge"]');
     const fab = ui.querySelector('[data-tnk="fab"]');
     const replies = ui.querySelector('[data-tnk="replies"]');
 
@@ -536,7 +672,16 @@
           ? `Video: ${videoHint}`
           : "Buka URL /@user/video/...";
     }
-    if (countEl) countEl.textContent = names.length ? `${names.length} nama` : "0 nama";
+    // Count — saat filter aktif tampilkan "X dari N" agar jelas kenapa
+    // tombol Copy bisa nonaktif walau ada hasil.
+    const vis = visible();
+    if (countEl) {
+      countEl.textContent = query.trim()
+        ? `${vis.length} dari ${names.length} nama`
+        : names.length
+          ? `${names.length} nama`
+          : "0 nama";
+    }
     if (badgeEl) {
       badgeEl.textContent = hasTemplate
         ? "API komentar: siap"
@@ -553,8 +698,26 @@
     }
     if (stopBtn) stopBtn.hidden = !running;
     if (copyBtn) {
-      copyBtn.disabled = names.length === 0;
-      copyBtn.textContent = names.length ? `Copy nama (${names.length})` : "Copy nama";
+      copyBtn.disabled = vis.length === 0;
+      copyBtn.textContent = vis.length
+        ? `Copy nama (${vis.length})`
+        : "Copy nama";
+    }
+    if (csvBtn) csvBtn.disabled = vis.length === 0;
+    if (mergeBtn) mergeBtn.disabled = false;
+
+    // Preview daftar — hormati filter & urutan (parity dengan popup).
+    const listEl = ui.querySelector('[data-tnk="list"]');
+    if (listEl) {
+      if (vis.length) {
+        listEl.hidden = false;
+        const show = vis.slice(0, 40);
+        listEl.textContent =
+          show.join("\n") + (vis.length > 40 ? `\n… +${vis.length - 40} lagi` : "");
+      } else {
+        listEl.hidden = true;
+        listEl.textContent = "";
+      }
     }
     if (fab) {
       fab.setAttribute("data-count", names.length > 0 ? String(names.length) : "");
@@ -706,11 +869,13 @@
     }
   });
 
-  // Template may arrive while browsing — refresh badge (session storage)
+  // Template may arrive while browsing — refresh badge (session storage).
+  // Tidak memakai nilai mentah `newValue` (tanpa cek TTL/shape): re-validasi
+  // via GET_TEMPLATE seperti GET_STATE popup, jadi badge "siap" selalu akurat
+  // bahkan saat template sudah kadaluarsa.
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "session" && changes.tnk_comment_url) {
-      hasTemplate = !!changes.tnk_comment_url.newValue;
-      render();
+      refreshTemplateFlag();
     }
     if (area === "local" && changes.rsx_prefs) applySettings();
   });
@@ -718,6 +883,31 @@
   function boot() {
     createUi();
     render();
+    // Default visibility: expanded saat ada hasil tersimpan (sama dengan
+    // Facebook) — pulihkan hasil lintas reload.
+    sendBg("GET_STATE").then((res) => {
+      if (!res?.ok || !res?.state) return;
+      const st = res.state;
+      const saved = Array.isArray(st.names) ? st.names : [];
+      // hasTemplate diterapkan TANPA SYARAT (pola popup: GET_STATE merekomputasi
+      // TTL+shape) — badge selalu akurat walau tanpa hasil tersimpan, dan saat
+      // service worker baru bangun.
+      if (typeof st.hasTemplate === "boolean" && st.status !== "running") {
+        hasTemplate = st.hasTemplate;
+      }
+      if (saved.length > 0 && st.status !== "running") {
+        setLocal({
+          status: st.status === "idle" ? "done" : st.status,
+          names: saved,
+          message:
+            typeof st.message === "string"
+              ? st.message
+              : `Hasil tersimpan — ${saved.length} nama. Klik Copy.`,
+          videoHint: typeof st.videoHint === "string" ? st.videoHint : "",
+        });
+      }
+      render();
+    });
     refreshTemplateFlag();
     sendBg("INJECT_MAIN").then(() => engineCmd("PING")).then((r) => {
       if (r?.ok) engineReady = true;

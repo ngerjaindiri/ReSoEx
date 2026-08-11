@@ -96,13 +96,17 @@ npm run build   # rakit bundle loadable ke dist/
 
 > Catatan: `npm install` tidak diperlukan — proyek tanpa dependensi runtime maupun dev.
 > Logika yang dibagi antar-world dipusatkan di `shared.js` dalam blok marker
-> `BEGIN/END-RESO-*`: normalisasi nama (`NORMALIZE`) dan pesan akhir run (`DONEMSG`).
+> `BEGIN/END-RESO-*`: normalisasi nama (`NORMALIZE`), pesan akhir run (`DONEMSG`),
+> parsing payload komentar (`PARSERS`), dan perkakas UI daftar (`PANELTOOLS`).
 > **Fixture test** (`tests/normalization-fixture.test.mjs`) memastikan semua salinan di
 > engine (MAIN world) dan content scripts tetap byte-identik — melanggar aturan ini
 > membuat `npm test` gagal.
 > Pesan yang sama untuk popup & panel dihasilkan oleh satu helper `doneMessage`
 > (`reasonToMessage` di background hanya mendelegasikannya), jadi tidak ada drift
 > kata/kalimat antar permukaan.
+> Fitur panel (search, Urutkan A–Z, CSV, Gabung) setara popup; Gabung lintas
+> platform dijalankan di background (`MERGE_ALL`) karena content script hanya
+> membawa normalizer platform-nya sendiri.
 
 ## Paket untuk Chrome Web Store
 

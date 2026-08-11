@@ -65,6 +65,122 @@
   }
   // END-RESO-NORMALIZE
 
+  // BEGIN-RESO-PARSERS
+  /**
+   * SINGLE SOURCE OF TRUTH untuk parsing payload komentar — dipakai engine
+   * MAIN-world (inject-fb.js / inject-tiktok.js / inject-ig.js) lewat salinan
+   * byte-identik di dalam marker yang sama — dijamin fixture test PARSERS.
+   * Semua fungsi murni: hanya memetakan payload JSON/teks ke daftar nama
+   * (tanpa normalisasi/dedupe — pemanggil yang menormalkan).
+   */
+
+  /** TikTok: nickname dari payload comment/list (jalur array + fallback walk). */
+  function parseTikTokComments(data, includeReplies) {
+    const out = [];
+    const arrays = [];
+    if (Array.isArray(data?.comments)) arrays.push(data.comments);
+    if (Array.isArray(data?.data?.comments)) arrays.push(data.data.comments);
+    if (Array.isArray(data?.comments?.list)) arrays.push(data.comments.list);
+
+    const takeUser = (user) => {
+      if (!user || typeof user !== "object") return;
+      const nick = user.nickname || user.nickName;
+      if (typeof nick === "string") out.push(nick);
+    };
+
+    if (arrays.length) {
+      for (const comments of arrays) {
+        for (const c of comments) {
+          if (!c || typeof c !== "object") continue;
+          takeUser(c.user);
+          if (typeof c.nickname === "string") out.push(c.nickname);
+          // Hanya balasan tertanam saat user memilih ikut sertakan
+          if (includeReplies) {
+            const replies = c.reply_comment || c.reply_comments || c.comments;
+            if (Array.isArray(replies)) {
+              for (const r of replies) takeUser(r?.user);
+            }
+          }
+        }
+      }
+      return out;
+    }
+
+    // Fallback: hanya node berbentuk komentar (hindari pohon balasan dalam saat nonaktif)
+    const walk = (v, depth = 0) => {
+      if (depth > 28 || v == null) return;
+      if (Array.isArray(v)) {
+        for (const item of v) walk(item, depth + 1);
+        return;
+      }
+      if (typeof v !== "object") return;
+      const looksComment =
+        v.user &&
+        (v.cid != null ||
+          v.comment_id != null ||
+          v.text != null ||
+          v.create_time != null ||
+          v.digg_count != null);
+      if (looksComment) takeUser(v.user);
+      for (const k of Object.keys(v)) {
+        if (
+          !includeReplies &&
+          (k === "reply_comment" || k === "reply_comments")
+        ) {
+          continue;
+        }
+        walk(v[k], depth + 1);
+      }
+    };
+    walk(data, 0);
+    return out;
+  }
+
+  /** Instagram: username dari payload comments (top-level). */
+  function parseIgComments(data) {
+    const out = [];
+    const comments = Array.isArray(data?.comments) ? data.comments : [];
+    for (const c of comments) {
+      if (!c || typeof c !== "object") continue;
+      const u = c?.user?.username || "";
+      if (u) out.push(u);
+    }
+    return out;
+  }
+
+  /** Facebook: nama dari teks GraphQL (pola regex — cermin extractNamesFromText). */
+  function extractGraphqlNames(text) {
+    const out = [];
+    if (!text || typeof text !== "string") return out;
+    const patterns = [
+      /"__typename"\s*:\s*"Comment"[\s\S]{0,1500}?"author"\s*:\s*\{[\s\S]{0,600}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+      /"author"\s*:\s*\{[\s\S]{0,400}?"__typename"\s*:\s*"User"[\s\S]{0,300}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+      /"author"\s*:\s*\{[\s\S]{0,300}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"[\s\S]{0,300}?"__typename"\s*:\s*"User"/g,
+      /"created_time"\s*:\s*\d+[\s\S]{0,500}?"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+      /"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"[\s\S]{0,500}?"created_time"\s*:\s*\d+/g,
+      /"body"\s*:\s*\{[^}]{0,200}"text"\s*:\s*"[^"]{0,500}"[\s\S]{0,400}?"author"\s*:\s*\{[\s\S]{0,400}?"name"\s*:\s*"((?:\\.|[^"\\]){2,100})"/g,
+    ];
+    const seen = new Set();
+    for (const re of patterns) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text))) {
+        let name;
+        try {
+          name = JSON.parse(`"${m[1]}"`);
+        } catch {
+          name = m[1];
+        }
+        if (typeof name === "string" && name && !seen.has(name.toLowerCase())) {
+          seen.add(name.toLowerCase());
+          out.push(name);
+        }
+      }
+    }
+    return out;
+  }
+  // END-RESO-PARSERS
+
   function addUsername(raw) {
     const u = normalizeInstagramUsername(raw);
     if (!u) return false;
@@ -111,11 +227,10 @@
 
   function parsePage(data, isReplyPage = false) {
     const comments = Array.isArray(data?.comments) ? data.comments : [];
+    for (const u of parseIgComments(data)) addUsername(u);
     const replyTargets = [];
     for (const c of comments) {
       if (!c || typeof c !== "object") continue;
-      const u = c?.user?.username || "";
-      if (u) addUsername(u);
       const id = c?.comment_id || c?.pk || c?.id;
       const childCount = Number(c?.child_comment_count || 0);
       if (id && childCount > 0) {

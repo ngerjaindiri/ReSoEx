@@ -184,6 +184,45 @@
   color: var(--rs-warn-text);
 }
 
+/* ---- Tools (search + sort) ---- */
+#fnk-root .fnk-tools {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+#fnk-root .fnk-search {
+  min-width: 0;
+  border: 1px solid var(--rs-line);
+  background: var(--rs-bg);
+  color: var(--rs-text);
+  border-radius: 10px;
+  padding: 7px 10px;
+  font-size: 12px;
+  outline: none;
+  transition: border-color var(--rs-dur-fast) var(--rs-ease);
+}
+
+#fnk-root .fnk-search:focus-visible {
+  border-color: var(--rs-accent);
+}
+
+/* ---- Preview daftar ---- */
+#fnk-root .fnk-list {
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--rs-text-dim);
+  background: var(--rs-bg);
+  border: 1px dashed var(--rs-line);
+  border-radius: 10px;
+  padding: 8px 10px;
+  margin-top: 2px;
+}
+
 /* ---- Actions ---- */
 #fnk-root .fnk-actions {
   display: grid;

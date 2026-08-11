@@ -2,6 +2,50 @@
 
 Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
 
+## [1.0.27] — 2026-08-11
+
+### Badge "API komentar" TikTok selalu akurat (simetris dengan IG & popup)
+
+- **`storage.onChanged` panel TT/IG tidak lagi memakai nilai mentah** — saat
+  template API berubah (capture atau kadaluarsa), panel mere-validasi via
+  `GET_TEMPLATE` (TTL + shape) alih-alih `!!newValue` yang bisa menampilkan
+  badge hijau "siap" padahal template sudah melewati TTL.
+- **Boot restore menerapkan `hasTemplate` tanpa syarat** — pola popup
+  (`GET_STATE` merekomputasi TTL+shape): badge panel TT/IG kini akurat meski
+  tanpa hasil tersimpan dan saat service worker baru bangun.
+
+## [1.0.26] — 2026-08-11
+
+### Parity fitur panel: search + sort + CSV + Gabung di 3 panel
+
+- **Panel FB/TikTok/IG kini setara popup** — tiap panel punya pencarian (filter
+  live), tombol Urutkan A–Z, preview daftar hasil (maks 40 + indikator sisa),
+  tombol **CSV** (nama file & header platform-aware: `reso-nama-*`/Nama untuk
+  FB/TT, `reso-username-*`/Username untuk IG), dan tombol **Gabung** (merge
+  FB+TT+IG unik). Copy & CSV kini menghormati filter aktif ("X dari N" di
+  count saat filter menyala).
+- **Restore hasil saat boot untuk TT/IG** — pola Facebook (v1.0.23): panel
+  memanggil `GET_STATE` saat load dan memulihkan hasil tersimpan lintas
+  reload beserta status/message/videoHint/postHint/hasTemplate.
+- **Parser payload komentar jadi satu sumber kebenaran** — blok `PARSERS`
+  (parseTikTokComments/parseIgComments/extractGraphqlNames) di shared.js,
+  disalin byte-identik ke ketiga engine inject-*.js dan diuji fixture
+  (layout + parity + behavior). Engine sebelumnya punya logika parse lokal
+  yang tak teruji otomatis.
+- **Perkakas UI daftar jadi satu sumber** — blok `PANELTOOLS`
+  (filterNames/sortNamesAz/csvContent/downloadTextFile/mergeAcrossPlatforms)
+  di shared.js, disalin byte-identik ke ketiga panel; popup memakainya via
+  export. Fixture test menjamin 4 salinan identik.
+- **Gabung lintas platform dipindah ke background** (`MERGE_ALL`) — content
+  scripts hanya membawa normalizer platform-nya sendiri, jadi merge
+  FB+TT+IG yang butuh ketiga aturan normalisasi harus jalan di background
+  (shared.js), bukan di halaman. Panel memanggil `MERGE_ALL` dan menampilkan
+  hasilnya.
+
+### Ketahanan & internal
+
+- `npm test` naik **65 → 72** (fixture PARSERS + PANELTOOLS + behavior).
+
 ## [1.0.25] — 2026-08-11
 
 ### Chore & dokumentasi
