@@ -49,6 +49,32 @@
   let postRoot = null;
   let engineMode = "idle"; // graphql | hybrid | dom
 
+  // Muat template pagination tersimpan (doc_id) dari sesi sebelumnya — jadi
+  // postingan baru bisa langsung paginate GraphQL tanpa buka komentar dulu.
+  try {
+    for (const t of loadStoredTemplates()) {
+      if (!t || !t.friendlyName || !t.doc_id) continue;
+      const variables = { ...(t.variables || {}) };
+      // Mulai dari halaman 1: bersihkan state pagination lama
+      delete variables.after;
+      delete variables.before;
+      delete variables.cursor;
+      delete variables.commentsAfterCursor;
+      delete variables.repliesAfterCursor;
+      variables.isPaginating = false;
+      variables.isInitialFetch = true;
+      gqlTemplates.set(`__stored__${t.friendlyName}`, {
+        url: t.url || "https://www.facebook.com/api/graphql/",
+        params: { doc_id: t.doc_id },
+        variables,
+        friendlyName: t.friendlyName,
+        capturedAt: 0,
+      });
+    }
+  } catch {
+    /* ignore */
+  }
+
   /** Data-plane only (PROGRESS/DONE/ERROR). Control plane is ENGINE_CMD via executeScript. */
   function post(type, payload = {}) {
     window.postMessage(
@@ -571,6 +597,7 @@
       capturedAt: Date.now(),
     };
     gqlTemplates.set(key, entry);
+    persistGqlTemplate(entry);
 
     // Classify top-level vs reply
     const lower = key.toLowerCase();
@@ -614,6 +641,41 @@
     return [...out];
   }
 
+  /** Base64 Relay form dari id feedback ("feedback:<id>"). */
+  function fbIdB64(id) {
+    if (typeof id !== "string" || !id) return id;
+    try {
+      return btoa(`feedback:${id}`);
+    } catch {
+      return id;
+    }
+  }
+
+  /** Cocokkan dua representasi id feedback (mentah vs base64 Relay). */
+  function fbIdsMatch(a, b) {
+    if (!a || !b) return false;
+    if (a === b) return true;
+    try {
+      return a === fbIdB64(b) || b === fbIdB64(a);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Normalisasi id feedback dari variabel template (base64 Relay → mentah). */
+  function normalizeFeedbackId(v) {
+    if (typeof v !== "string" || !v) return v;
+    if (v.length > 25 && /^[A-Za-z0-9+/=]+$/.test(v)) {
+      try {
+        const m = atob(v).match(/^feedback[:_](\d+)$/);
+        if (m) return m[1];
+      } catch {
+        /* bukan base64 */
+      }
+    }
+    return v;
+  }
+
   /**
    * Apakah respons GraphQL dari request `reqIds` boleh diekstrak namanya?
    * Rule: id URL (permalink) + id postingan yang sedang di-paginate. Request
@@ -621,9 +683,58 @@
    */
   function isTargetCommentResponse(reqIds) {
     if (!reqIds || !reqIds.length) return true;
-    const allowed = new Set(feedbackIdsFromUrl());
-    if (activeFeedbackId) allowed.add(activeFeedbackId);
-    return reqIds.some((id) => allowed.has(id));
+    // Id URL bisa mentah, request FB asli membawa base64 Relay
+    // ("feedback:<id>" encoded) — cocokkan kedua bentuk.
+    const allowed = [...new Set(feedbackIdsFromUrl())];
+    if (activeFeedbackId) allowed.push(activeFeedbackId);
+    return reqIds.some((id) => allowed.some((a) => fbIdsMatch(a, id)));
+  }
+
+  // ---------------- persistensi template pagination (doc_id) ----------------
+  const TPL_STORAGE_KEY = "fnk_fb_gql_tpl_v1";
+
+  /** Template pagination tersimpan (doc_id terbaru) — dipakai ulang untuk
+   *  template sintetik di postingan lain tanpa perlu buka komentar dulu. */
+  function loadStoredTemplates() {
+    try {
+      const raw = localStorage.getItem(TPL_STORAGE_KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Simpan template pagination (ber-doc_id) terbaik ke localStorage. */
+  function persistGqlTemplate(entry) {
+    try {
+      if (!entry || !entry.params || !entry.params.doc_id) return;
+      if (!isPaginationLike(entry)) return;
+      const list = loadStoredTemplates();
+      const clean = {
+        friendlyName: entry.friendlyName,
+        url: entry.url,
+        doc_id: entry.params.doc_id,
+        variables: entry.variables,
+        capturedAt: entry.capturedAt,
+      };
+      const idx = list.findIndex((t) => t.friendlyName === clean.friendlyName);
+      if (idx === 0 && list[0] && list[0].doc_id === clean.doc_id) return;
+      if (idx >= 0) list.splice(idx, 1);
+      list.unshift(clean);
+      localStorage.setItem(TPL_STORAGE_KEY, JSON.stringify(list.slice(0, 3)));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Template pagination terbaik dari sesi sebelumnya (doc_id paling baru). */
+  function bestStoredPaginationTemplate() {
+    const list = loadStoredTemplates();
+    for (const t of list) {
+      if (t && t.doc_id && isPaginationLike(t)) return t;
+    }
+    return null;
   }
 
   function drainGqlBuffer() {
@@ -1119,6 +1230,13 @@
       if (flat.includes(`"feedbackID":"${id}"`)) return true;
       if (flat.includes(`"feedback_id":"${id}"`)) return true;
       if (flat.includes(`"id":"${id}"`)) return true;
+      // Variabel template asli FB membawa id dalam bentuk base64 Relay
+      const b64 = fbIdB64(id);
+      if (b64 !== id) {
+        if (flat.includes(`"feedbackID":"${b64}"`)) return true;
+        if (flat.includes(`"feedback_id":"${b64}"`)) return true;
+        if (flat.includes(`"id":"${b64}"`)) return true;
+      }
       return false;
     });
   }
@@ -1168,35 +1286,74 @@
    * open/scroll the comment list first. Urutan kandidat = prioritas probe;
    * probe memvalidasi id mana yang benar menghasilkan page_info.
    */
+  /**
+   * doc_id untuk CometUFICommentsProviderPaginationQuery. Prioritas: template
+   * tersimpan (localStorage) → daftar fallback dari scraper publik (terbaru
+   * dulu). Probe memvalidasi tiap kandidat, jadi doc_id basi hanya membuat
+   * kandidat itu dilewati — tidak memutus run.
+   */
+  const PAGINATION_DOC_IDS = [
+    "25399415259725176", // 2026 — crawler FB aktif
+    "5676025945801633", // 2025 — FacebookMasterTool
+    "4712008195539492", // 2024 — Crawl_Facebook_Data_Toolbox
+  ];
+
   function buildSyntheticPaginationTemplates() {
     const ids = feedbackIdsFromUrl();
     if (!ids.length) return [];
+    const stored = bestStoredPaginationTemplate();
+    const docIds = [];
+    if (stored && stored.doc_id) docIds.push(stored.doc_id);
+    for (const d of PAGINATION_DOC_IDS) {
+      if (!docIds.includes(d)) docIds.push(d);
+    }
     const base = {
       url: "https://www.facebook.com/api/graphql/",
-      params: {},
       friendlyName: "CometUFICommentsProviderPaginationQuery",
       capturedAt: Date.now(),
     };
-    return ids.slice(0, 3).map((feedbackID) => ({
-      ...base,
-      variables: {
-        count: 20,
-        cursor: null,
-        feedbackSource: 44,
-        actionSource: "anywhere",
-        queryPath: "/comments/pagination/",
-        scale: 1,
-        isFirstLoad: true,
-        previewComments: false,
-        feedbackID,
-        useDefaultActor: false,
-        // Paksa mode "Semua Komentar" (kronologis, tanpa filter "paling
-        // relevan") — tanpa sortKey ini FB default ke RANKED_THREADED yang
-        // hanya mengembalikan sebagian komentar dan pagination berhenti dini.
-        sortKey: "RANKED_UNFILTERED",
-        __relay_internal__pv__IsWorkUserrelayprovider: false,
-      },
-    }));
+    // Urutan kandidat: doc_id tersimpan × tiap id URL (probe memvalidasi id
+    // mana yang benar), lalu doc_id fallback × id pertama.
+    const cands = [];
+    for (const id of ids.slice(0, 3)) {
+      cands.push({ docId: docIds[0], id });
+    }
+    for (const docId of docIds.slice(1)) {
+      cands.push({ docId, id: ids[0] });
+    }
+    return cands.slice(0, 3).map(({ docId, id }) => {
+      // Feedback id Relay wajib base64 "feedback:<id>" — id mentah ditolak
+      // (dikonfirmasi 3 scraper independen 2024–2026).
+      const feedbackID = fbIdB64(id);
+      return {
+        ...base,
+        params: { doc_id: docId },
+        variables: {
+          after: null,
+          before: null,
+          count: 20,
+          first: 20,
+          feedbackID,
+          id: feedbackID,
+          focusCommentID: null,
+          includeNestedComments: true,
+          isInitialFetch: true,
+          isPaginating: true,
+          last: null,
+          scale: 1,
+          useDefaultActor: false,
+          feedLocation: "NEWSFEED",
+          feedbackSource: 1,
+          // Paksa mode "Semua Komentar" (kronologis, tanpa filter "paling
+          // relevan") — tanpa ini FB default ke RANKED_THREADED yang hanya
+          // mengembalikan sebagian komentar dan pagination berhenti dini.
+          commentsIntentToken: "RANKED_UNFILTERED_CHRONOLOGICAL_REPLIES_INTENT_V1",
+          topLevelViewOption: "RANKED_UNFILTERED",
+          sortKey: "RANKED_UNFILTERED",
+          __relay_internal__pv__IsWorkUserrelayprovider: false,
+        },
+      };
+    });
   }
 
   /**
@@ -1277,10 +1434,12 @@
     }
 
     // Kunci target: nama dari respons GraphQL halaman hanya diproses untuk
-    // feedback id ini (anti kontaminasi postingan lain di feed).
+    // feedback id ini (anti kontaminasi postingan lain di feed). Normalisasi
+    // bentuk base64 Relay → mentah agar cocok dengan id URL.
     if (template.variables) {
       const v = template.variables;
-      activeFeedbackId = String(v.feedbackID || v.feedback_id || "") || null;
+      activeFeedbackId =
+        normalizeFeedbackId(String(v.feedbackID || v.feedback_id || "")) || null;
     }
 
     engineMode = "graphql";

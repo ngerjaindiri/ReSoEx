@@ -1,4 +1,14 @@
 /* ReSo — popup flat minimal (v1.0.29) */
+
+/* Font ikon di-bundle ke extension (tidak bergantung jaringan/CSP). */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/material-symbols-rounded.woff2") format("woff2");
+}
+
 :root {
   --bg: #f7f8fa;
   --card: #ffffff;

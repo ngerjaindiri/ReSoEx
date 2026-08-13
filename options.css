@@ -1,4 +1,14 @@
 /* ===== ReSo Design System — Options page ===== */
+
+/* Font ikon di-bundle ke extension (tidak bergantung jaringan/CSP). */
+@font-face {
+  font-family: "Material Symbols Rounded";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("fonts/material-symbols-rounded.woff2") format("woff2");
+}
+
 :root {
   color-scheme: light dark;
   --rs-bg: #f0f2f5;

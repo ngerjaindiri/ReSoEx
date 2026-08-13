@@ -724,15 +724,14 @@
     return root;
   }
 
-  /** Load Material Symbols (Google) sekali — dipakai semua ikon panel/FAB. */
+  /** Load ikon font (Material Symbols) sekali — di-bundle ke extension agar
+   *  tidak bergantung CSP/jaringan Google Fonts (FB/IG/blocker bisa memblokir). */
   function ensureIconFont() {
     if (document.getElementById("rs-ms-font")) return;
-    const link = document.createElement("link");
-    link.id = "rs-ms-font";
-    link.rel = "stylesheet";
-    link.href =
-      "https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,300..700,0..1,-50..200&display=block";
-    (document.head || document.documentElement).appendChild(link);
+    const style = document.createElement("style");
+    style.id = "rs-ms-font";
+    style.textContent = `@font-face{font-family:"Material Symbols Rounded";font-style:normal;font-weight:400;font-display:block;src:url(${chrome.runtime.getURL("fonts/material-symbols-rounded.woff2")}) format("woff2")}`;
+    (document.head || document.documentElement).appendChild(style);
   }
 
   /**

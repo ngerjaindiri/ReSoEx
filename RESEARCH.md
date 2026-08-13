@@ -866,3 +866,98 @@ Konteks user: "Cek tampilan chip di browser dan perbaiki yang masih salah".
 - Tetap wajib cek di Facebook asli (butuh login): layout bar aksi yang
   sebenarnya (berlabel / ikon-only / posisi baru) menentukan apakah chip
   ter-dock di bar aksi atau baris komposer.
+
+
+## 21. Ikon Jadi Teks di FB/IG — Font di-Bundle (v1.0.39, 2026-08-13)
+
+Konteks user: "icon nya masih rusak bro, di fb, jadi icon iconya jadi teks"
+— ikon panel/FAB (Material Symbols) tampil sebagai teks literal ("play_arrow",
+"close", "forum").
+
+### Verifikasi empiris (bukan tebakan)
+1. curl header CSP www.facebook.com: style-src memuat fonts.googleapis.com,
+   font-src memuat fonts.gstatic.com — header page publik TIDAK memblokir.
+2. Chrome headless di Facebook/TikTok asli (page publik): font memuat dan
+   glyph ter-render (lebar 24px, bukan teks). Jadi page publik FB bukan
+   penyebab — tersangka: CSP halaman login/varian, adblock, blip jaringan.
+3. Instagram asli: request CSS font GAGAL (requestfailed) dan ikon ter-render
+   sebagai teks literal (lebar 61,8px untuk "close") — IG MEMBLOKIR Google
+   Fonts. Konfirmasi bahwa ketergantungan jaringan = akar masalah.
+4. Uji mekanisme: extension uji kecil dengan @font-face via chrome.runtime.
+   getURL + halaman CSP font-src "none" → font tetap ter-render (lebar 24px).
+   Style inline dari content script TIDAK tunduk pada font-src halaman.
+
+### Perbaikan v1.0.39
+- fonts/material-symbols-rounded.woff2 (361 KB, statis dari Google Fonts v1)
+  di-bundle ke repo; manifest web_accessible_resources mengekspos ke
+  FB/TikTok/IG; npm run build menyalin fonts/ ke dist/.
+- content-fb/tiktok/ig: ensureIconFont() kini inject <style> @font-face dengan
+  chrome.runtime.getURL("fonts/...") — bukan <link> Google Fonts.
+- popup.html/options.html: link Google Fonts dihapus; @font-face relatif
+  ditambahkan di popup.css/options.css (origin extension, tanpa WAR).
+- Nol referensi fonts.googleapis/gstatic tersisa di source.
+
+### Validasi e2e (dist/ asli sebagai extension)
+- Chrome headless + --host-resolver-rules MAP www.facebook.com 127.0.0.1 +
+  server HTTPS lokal dengan CSP meta: default-src self; style-src self
+  unsafe-inline; font-src none; script-src unsafe-inline.
+- Hasil: panel ter-render; 11 ikon .rs-ic semuanya fontFamily "Material
+  Symbols Rounded" dengan lebar glyph 14–35px (bukan teks literal); FAB 48px;
+  document.fonts.check=true; requestfailed=0; error konsol=0.
+- npm run check Syntax OK · npm test 74/74 · npm run build OK.
+
+### Catatan
+- Font statis tidak punya sumbu FILL: ikon state aktif (sort aktif, checkbox
+  tercentang, tombol aktif) tampil versi outline — bentuk sama, hanya tidak
+  terisi. Bila ingin FILL kembali, opsi: bundle variable font (5,3 MB) atau
+  subset variable dengan fonttools (butuh build step tambahan).
+- Popup/options memakai URL relatif (origin extension) — mekanisme identik
+  dengan content script, sudah teruji satu keluarga (chrome-extension://).
+
+---
+
+## 21. Audit mesin FB — "masih harus buka komentar manual" (v1.0.40)
+
+### Gejala
+User harus membuka semua komentar (expand) manual agar rekap lengkap — padahal
+v1.0.35/1.0.36 sudah mengaktifkan sortir otomatis + anti kontaminasi.
+
+### Akar masalah (diverifikasi lewat riset scraper publik, bukan tebakan)
+Dua cacat pada template pagination sintetik:
+
+1. **Tidak ada `doc_id`** — endpoint Relay FB `/api/graphql/` memilih query via
+   `doc_id` (Relay document id). Template sintetik lama punya `params: {}` →
+   FB menolak → probe gagal → jatuh ke mode DOM → butuh buka komentar manual.
+2. **`feedbackID` id mentah** — query `CometUFICommentsProviderPaginationQuery`
+   menerima `feedback:<id>` dalam bentuk **base64** (`btoa("feedback:"+id)`),
+   bukan angka mentah. Dikonfirmasi di 3 repo scraper independen:
+
+| Sumber | Tanggal | doc_id | bentuk feedbackID |
+|---|---|---|---|
+| td2510/Crawl_Facebook_Data_Toolbox | 2024-11 | `4712008195539492` | btoa(`feedback:${id}`) |
+| thuytx03/FacebookMasterTool | 2025-02 | `5676025945801633` (0x142a50c63c43a1) | btoa(`feedback:${id}`) |
+| cnv192/Auto-ShoppeAffilate | 2026-02 | `25399415259725176` | Buffer feedback:${id} → base64 |
+
+### Perbaikan (inject-fb.js)
+- **doc_id**: `PAGINATION_DOC_IDS` fallback (terbaru dulu) + prioritas template
+  tersimpan; probe memvalidasi tiap kandidat (yang basi dilewati, tidak memutus run).
+- **feedbackID base64**: helper `fbIdB64`; variabel sintetik diperkaya
+  (includeNestedComments, isPaginating, commentsIntentToken
+  `RANKED_UNFILTERED_CHRONOLOGICAL_REPLIES_INTENT_V1`, topLevelViewOption/sortKey
+  RANKED_UNFILTERED, id + feedbackID).
+- **Persistensi template** (`fnk_fb_gql_tpl_v1`, maks 3): setiap capture
+  pagination ber-doc_id disimpan → dimuat saat boot → postingan baru langsung
+  paginate tanpa buka komentar.
+- **Pencocokan id raw/b64**: `fbIdsMatch` dan `normalizeFeedbackId` dipakai di
+  `matchesFeedback`, `isTargetCommentResponse`, dan `activeFeedbackId`.
+
+### Efek samping positif
+Memulihkan jalur harvest respons halaman yang rusak sejak v1.0.36: request asli
+FB membawa id base64, filter lama membandingkan dengan id mentah URL → semua
+respons halaman dibuang. Kini kedua bentuk dicocokkan.
+
+### Risiko sisa (jujur)
+- doc_id berubah saat FB memperbarui query → probe melompat ke kandidat berikutnya;
+  setelah satu run sukses di sesi mana pun, doc_id terbaru tersimpan otomatis.
+- Variabel sintetik versi berbeda doc_id: probe memvalidasi per kandidat.
+- Verifikasi di Facebook asli tetap wajib (post viral, tanpa ganti sortir).

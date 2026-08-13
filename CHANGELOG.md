@@ -2,6 +2,57 @@
 
 Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
 
+## [1.0.40] — 2026-08-13
+
+### Mesin FB — masih harus buka komentar manual — FIX: doc_id + feedbackID base64 + persistensi template
+
+- **Akar masalah (riset 3 scraper independen 2024–2026)**: template pagination
+  sintetik dikirim TANPA `doc_id` — endpoint Relay FB `/api/graphql/` wajib
+  `doc_id` untuk memilih query, tanpa itu probe selalu gagal → jatuh ke mode
+  DOM → user harus buka komentar manual agar template asli ter-capture.
+  Kedua, `feedbackID` dikirim sebagai id mentah, padahal FB menerima bentuk
+  base64 Relay `btoa("feedback:<id>")` (dikonfirmasi di ketiga scraper).
+- **Fix 1 — doc_id**: template sintetik kini membawa `doc_id`. Prioritas:
+  template tersimpan di localStorage → daftar fallback `PAGINATION_DOC_IDS`
+  (`25399415259725176` 2026 · `5676025945801633` 2025 · `4712008195539492`
+  2024). Probe memvalidasi tiap kandidat — doc_id basi hanya dilewati.
+- **Fix 2 — feedbackID base64**: variabel `feedbackID` + `id` di-encode
+  `feedback:<id>` base64; variabel diperkaya (includeNestedComments,
+  isPaginating, commentsIntentToken `RANKED_UNFILTERED_...` dll) agar cocok
+  dengan bentuk capture FB terkini.
+- **Fix 3 — persistensi**: template pagination ber-doc_id disimpan ke
+  localStorage (`fnk_fb_gql_tpl_v1`, maks 3, per friendlyName) saat capture;
+  dimuat saat boot. Sekali berhasil di postingan mana pun, semua postingan
+  berikutnya langsung paginate GraphQL tanpa buka komentar.
+- **Fix 4 — pencocokan id raw/b64**: `matchesFeedback`, `isTargetCommentResponse`,
+  dan `activeFeedbackId` kini mengenali kedua bentuk (mentah vs base64 Relay) —
+  sekaligus memulihkan jalur harvest respons halaman yang sempat ter-filter
+  salah di v1.0.36 (request asli FB membawa id base64, filter lama membandingkan
+  dengan id mentah → respons halaman dibuang).
+
+## [1.0.39] — 2026-08-13
+
+### Ikon jadi teks di FB/IG — FIX: font ikon di-bundle ke extension
+
+- **Akar masalah**: ikon panel/FAB memakai Material Symbols via Google Fonts
+  (`fonts.googleapis.com`) — bisa gagal dimuat (CSP halaman, adblock, blip
+  jaringan). Diverifikasi di Chrome headless: Facebook publik OK, tapi
+  Instagram memblokir CSS font (ikon tampil sebagai teks literal seperti
+  "play_arrow").
+- **Fix**: font `fonts/material-symbols-rounded.woff2` (361 KB, statis)
+  di-bundle ke extension; @font-face di-inject dari `chrome.runtime.getURL`
+  (content scripts) / URL relatif (popup & options). Tidak bergantung CSP
+  halaman atau jaringan sama sekali.
+- **Terbukti lolos CSP paling ketat** (`font-src 'none'`): uji e2e memuat
+  dist/ sebagai extension sungguhan di halaman palsu facebook.com dengan CSP
+  ketat — semua ikon panel & FAB ter-render sebagai glyph (bukan teks),
+  tanpa error konsol.
+- `web_accessible_resources` mengekspos font ke halaman FB/TikTok/IG;
+  `npm run build` ikut menyalin `fonts/` ke dist/.
+- Catatan: font statis tidak mendukung sumbu FILL — ikon state aktif
+  (sort aktif, checkbox tercentang) tampil versi outline; bentuk ikon tetap
+  sama.
+
 ## [1.0.38] — 2026-08-13
 
 ### Verifikasi visual chip di browser + fallback baris komposer
