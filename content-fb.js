@@ -895,7 +895,17 @@
       return;
     }
     const row = findActionRow(post);
-    const host = row || post;
+    let host = row || null;
+    if (!host) {
+      // Fallback: baris komposer (kolom "Tulis komentar…") — posisi aksi di
+      // layout FB baru (ikon kecil di samping kotak komentar). Hindari chip
+      // menempel di ujung bawah post yang tampak "pecah".
+      const composer = post.querySelector(
+        '[role="textbox"], textarea, [contenteditable="true"]'
+      );
+      host = (composer && composer.parentElement) || null;
+    }
+    if (!host) host = post;
     if (chip.parentElement !== host) {
       try {
         // Append at end of Like/Comment/Share row so it sits next to them

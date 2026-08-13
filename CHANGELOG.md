@@ -2,6 +2,19 @@
 
 Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
 
+## [1.0.38] — 2026-08-13
+
+### Verifikasi visual chip di browser + fallback baris komposer
+
+- **Chip diverifikasi di Chrome headless (puppeteer)** dengan fixture halaman
+  yang meniru DOM Facebook: baris aksi berlabel, ikon-only (layout baru),
+  title-only, React re-render (chip dilepas & terpasang lagi), dan klik chip
+  membuka panel — semua lolos, tanpa error konsol.
+- **Fallback baris komposer** — saat bar Like/Comment/Share tak terdeteksi
+  (mis. label berubah total), chip tidak lagi menempel di ujung bawah post
+  (tampak "pecah") melainkan ter-dock ke baris "Tulis komentar…" — posisi
+  aksi pada layout FB terbaru.
+
 ## [1.0.37] — 2026-08-13
 
 ### Chip di bar Like/Comment Facebook diperbaiki (audit UI pecah)

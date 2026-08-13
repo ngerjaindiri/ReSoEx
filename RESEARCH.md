@@ -821,3 +821,48 @@ Chip di bar Like/Comment".
 - Bila chip masih terlihat salah di lapangan, lampirkan screenshot + versi
    layout Facebook (baris aksi berlabel / ikon-only / posisi baru) agar
    selektor bisa dipersempit.
+
+
+## 20. Verifikasi Visual Chip di Browser + Fallback Komposer (v1.0.38, 2026-08-13)
+
+Konteks user: "Cek tampilan chip di browser dan perbaiki yang masih salah".
+
+### Cara verifikasi (bukan tebakan)
+- Chrome tidak tersedia di sandbox → dipasang puppeteer + Chrome for Testing
+  (headless) + library runtime sistem yang kurang (apt: libnss3, glib, X,
+  gbm, dll — modifikasi sandbox sementara, di luar repo).
+- Fixture /tmp/fnk-fixture/fixture.html meniru DOM Facebook: post
+  div[role="article"] + bar aksi flex + komposer, dengan 3 varian tombol:
+  berlabel (Suka/Komentar/Bagikan + aria-label), ikon-only (aria-label,
+  layout FB 2025–2026), dan title-only. content-fb.js dijalankan apa adanya
+  dengan stub minimal chrome.runtime/chrome.storage.
+- Script .tmp-check-chip.mjs (dihapus setelah dipakai) memeriksa: chip ada,
+  ter-dock di bar aksi, ikon forum, badge tersembunyi, selaras (delta < 1px),
+  tidak menimpa tombol Like, berada setelah Share, di dalam baris; lalu
+  mensimulasikan React re-render (bar aksi diganti → chip lama hilang) dan
+  memastikan watcher coalescing 800 ms memasang ulang; terakhir klik chip →
+  panel terbuka. Screenshot: /tmp/fnk-fixture/chip-*.png.
+
+### Hasil
+- labeled / icon / title: SEMUA lolos — dockedInRow=true, iconForum=true,
+  alignDelta=0.5px, likeOverlap=false, chipAfterShare=true,
+  chipInsideRow=true, errors konsol = 0.
+- Re-render (3x ganti layout): chip selalu terpasang kembali (watcher jalan).
+- Klik chip → panel terbuka (fnk-collapsed dihapus).
+
+### Perbaikan tambahan yang ditemukan saat pengujian
+- Skenario "no row": bila findActionRow gagal total (label berubah sama
+  sekali), chip lama menempel di ujung bawah post → tampak pecah. → Fallback
+  baru: ter-dock ke baris komposer (role=textbox / textarea /
+  contenteditable) — posisi aksi pada layout FB terbaru (ikon kecil di
+  samping kotak komentar). Terverifikasi: hostClass=composer, bukan post.
+
+### Validasi
+- npm run check Syntax OK · npm test 74/74 · npm run build OK
+- Artifak sementara dibersihkan: .tmp-check-chip.mjs dihapus, node_modules
+  (puppeteer, --no-save) dihapus, fixture tetap di /tmp untuk referensi.
+
+### Catatan
+- Tetap wajib cek di Facebook asli (butuh login): layout bar aksi yang
+  sebenarnya (berlabel / ikon-only / posisi baru) menentukan apakah chip
+  ter-dock di bar aksi atau baris komposer.
