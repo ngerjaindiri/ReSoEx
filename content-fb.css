@@ -333,13 +333,16 @@
   all: initial;
   --rs-accent: #1877f2;
   --rs-accent-2: #42b72a;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   vertical-align: middle;
   margin: 0 2px;
   flex: 0 0 auto;
+  order: 99;
   line-height: 0;
+  overflow: visible;
   z-index: 5;
   position: relative;
 }
@@ -359,10 +362,14 @@
   height: 36px;
   min-width: 36px;
   min-height: 36px;
+  max-width: 36px;
+  max-height: 36px;
   border-radius: 50%;
   cursor: pointer;
   color: #65676b;
   background: transparent;
+  border: none;
+  padding: 0;
   transition: background 0.12s ease, color 0.12s ease;
 }
 

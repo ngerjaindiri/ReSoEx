@@ -782,7 +782,8 @@
         title="Buka panel Nama Komentar"
         aria-label="Buka panel Nama Komentar">
         <svg class="fnk-action-svg" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-          <path fill="currentColor" d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v1h16v-1c0-2.66-5.33-4-8-4z"/>
+          <!-- forum — ikon sama dengan FAB (satu entry point, design system CONSISTENCY.md) -->
+          <path fill="currentColor" d="M21 6h-2v9H6v2c0 .55.45 1 1 1h11l4 4V7c0-.55-.45-1-1-1zm-4 6V3c0-.55-.45-1-1-1H3c-.55 0-1 .45-1 1v14l4-4h10c.55 0 1-.45 1-1z"/>
         </svg>
         <span class="fnk-action-badge" data-fnk-inline="badge" hidden></span>
       </button>
@@ -836,31 +837,45 @@
 
   /**
    * Find the UFI action row (Like / Comment / Share) inside a post.
+   * Toleran terhadap perubahan DOM Facebook (2025–2026): tombol aksi bisa
+   * berlabel teks, ikon-only, atau ikon kecil tak berlabel di samping kotak
+   * komentar — anchor boleh salah satu dari Like/Comment/Share, dan baris
+   * cukup memuat 2+ aksi (tidak wajib Like pertama).
    */
+  function actionLabel(btn) {
+    return `${btn.innerText || ""} ${btn.getAttribute("aria-label") || ""} ${btn.getAttribute("title") || ""}`
+      .replace(/\s+/g, " ")
+      .trim()
+      .toLowerCase();
+  }
+
   function findActionRow(post) {
     if (!post) return null;
+    const isLike = (t) =>
+      /^(like|suka)\b/.test(t) ||
+      t === "like" ||
+      t === "suka" ||
+      /beri reaksi|\breact\b/.test(t);
+    const isComment = (t) =>
+      /\bcomment\b|\bkomentar\b/.test(t) ||
+      /\bleave a comment\b|\btulis komentar\b/.test(t);
+    const isShare = (t) => /\bshare\b|\bbagikan\b/.test(t);
+
     const buttons = post.querySelectorAll('[role="button"]');
     for (const btn of buttons) {
-      const t = `${btn.innerText || ""} ${btn.getAttribute("aria-label") || ""}`
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      if (!/^(like|suka)\b/.test(t) && t !== "like" && t !== "suka") continue;
+      const t = actionLabel(btn);
+      if (!isLike(t) && !isComment(t) && !isShare(t)) continue;
       let row = btn.parentElement;
       for (let i = 0; i < 8 && row; i++) {
         const labels = [...row.querySelectorAll('[role="button"]')]
-          .map((b) =>
-            `${b.innerText || ""} ${b.getAttribute("aria-label") || ""}`
-              .toLowerCase()
-              .trim()
-          )
+          .map(actionLabel)
+          .filter(Boolean)
           .join(" | ");
-        const hasLike = /(^|\|)(like|suka)\b/.test(labels) || /\blike\b|\bsuka\b/.test(labels);
-        const hasComment =
-          /\bcomment\b|\bkomentar\b/.test(labels) ||
-          /\bleave a comment\b|\btulis komentar\b/.test(labels);
-        const hasShare = /\bshare\b|\bbagikan\b/.test(labels);
-        if (hasLike && (hasComment || hasShare)) {
+        const hasLike = isLike(labels) || /(^|\|)(like|suka)\b/.test(labels);
+        const hasComment = isComment(labels) || /(^|\|)(comment|komentar)\b/.test(labels);
+        const hasShare = isShare(labels) || /(^|\|)(share|bagikan)\b/.test(labels);
+        const score = (hasLike ? 1 : 0) + (hasComment ? 1 : 0) + (hasShare ? 1 : 0);
+        if (score >= 2) {
           // Prefer the tightest row that still has 2+ actions
           return row;
         }
@@ -891,11 +906,13 @@
     }
     chip.classList.remove("fnk-inline-hidden");
     chip.classList.add("fnk-inline-docked");
-    // Flex-friendly if parent is flex
+    // Flex-friendly if parent is flex — selalu paling kanan (order 99) agar
+    // tidak menggeser tombol Like/Comment/Share Facebook.
     try {
       const cs = getComputedStyle(host);
       if (cs.display === "flex" || cs.display === "inline-flex") {
         chip.style.alignSelf = "center";
+        chip.style.order = "99";
       }
     } catch {
       /* ignore */
@@ -1361,6 +1378,23 @@
         childList: true,
         subtree: true,
       });
+    } catch {
+      /* ignore */
+    }
+    // Chip bar Like: React Facebook sering me-render ulang post (buka komentar,
+    // scroll, like) dan chip ikut terlepas dari DOM. Coalescing timer (TIDAK
+    // di-reset tiap mutasi) memastikan chip selalu terpasang kembali walau
+    // halaman bermutasi terus-menerus — tanpa polling.
+    let chipTimer = null;
+    try {
+      new MutationObserver(() => {
+        if (chipTimer) return;
+        chipTimer = setTimeout(() => {
+          chipTimer = null;
+          const chip = document.getElementById("fnk-inline");
+          if (!chip || !chip.isConnected) placeInlineBar();
+        }, 800);
+      }).observe(document.body, { childList: true, subtree: true });
     } catch {
       /* ignore */
     }

@@ -2,6 +2,24 @@
 
 Semua perubahan penting dicatat di sini. Format mengikuti [Keep a Changelog](https://keepachangelog.com/id-ID/1.1.0/), versi mengikuti [Semantic Versioning](https://semver.org/).
 
+## [1.0.37] — 2026-08-13
+
+### Chip di bar Like/Comment Facebook diperbaiki (audit UI pecah)
+
+- **Icon chip diseragamkan ke `forum`** — ikon yang sama dengan FAB (satu entry
+  point, design system CONSISTENCY.md 1.1), menggantikan SVG `person` lama.
+- **`findActionRow` toleran DOM Facebook baru (2025–2026)** — tombol aksi kini
+  bisa ikon-only / tak berlabel di samping kotak komentar; anchor boleh salah
+  satu dari Like/Comment/Share (tidak wajib Like pertama), baris cukup memuat
+  2+ aksi, dan label dibaca dari teks + `aria-label` + `title`.
+- **Chip tidak lagi hilang saat React me-render ulang post** — coalescing
+  watcher (tidak di-reset tiap mutasi, tanpa polling) memastikan chip selalu
+  terpasang kembali walau halaman bermutasi terus-menerus (buka komentar,
+  scroll, like).
+- **Chip tidak lagi menggeser/memecah baris aksi** — `order: 99` di flex row
+  (selalu paling kanan), dimensi button dikunci (min/max 36px), `box-sizing`
+  & `overflow: visible` eksplisit.
+
 ## [1.0.36] — 2026-08-11
 
 ### Audit hasil v1.0.35 — tutup celah kontaminasi lintas post yang tersisa

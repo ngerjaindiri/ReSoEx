@@ -765,3 +765,59 @@ pengambilan nama di inject-fb.js untuk sisa celah kontaminasi lintas post.
 - Di feed tanpa URL permalink, sebelum probe memilih template, respons
   halaman tidak diekstrak (tunggu kunci target) — template tetap ter-capture
   dan replay mengekstrak setelah probe.
+
+
+## 19. Audit UI Facebook — Chip bar Like/Comment pecah (v1.0.37, 2026-08-13)
+
+Konteks user: "audit facebook dong, ui nya pecah" → klarifikasi: "Yang pecah:
+Chip di bar Like/Comment".
+
+### Fakta dari kode (bukan tebakan)
+- git diff 8249d5a..97cae37 membuktikan chip (ensureActionIcon,
+  placeInlineBar, findActionRow, CSS #fnk-inline) TIDAK berubah sama sekali
+  antara v1.0.27 dan v1.0.36 — jadi kerusakan bukan regresi dari redesign
+  flat v1.0.29.
+- Panel FB ≡ IG secara struktur/CSS (set-diff fungsional, audit v1.0.36) dan
+  dist/ sinkron dengan source — bagian panel bukan sumber masalah.
+- Riset web (Reddit/SocialBee 2025–2026): Facebook menguji posisi baru tombol
+  Like/Comment/Share — ikon kecil tanpa label di samping kotak komentar.
+  findActionRow lama mensyaratkan tombol pertama berlabel like|suka → dengan
+  DOM baru baris tak terdeteksi → chip disembunyikan / ter-dock ke seluruh
+  post (menempel di bawah kotak komentar = tampak "pecah").
+- placeInlineBar hanya dipicu ulang lewat debounce 300 ms scheduleNavCheck
+  yang DI-RESET setiap mutasi — di feed yang sibuk bisa kelaparan
+  (starvation) → chip yang dilepas React tidak pernah terpasang kembali.
+
+### Perbaikan v1.0.37 (content-fb.js + content-fb.css)
+1. Icon chip → forum (SVG Material, sama dengan FAB) — satu entry point
+   visual sesuai CONSISTENCY.md 1.1 (ikon sama untuk fungsi sama).
+2. findActionRow ditulis ulang: label dibaca dari teks + aria-label + title;
+   anchor boleh Like ATAU Comment ATAU Share (tidak wajib Like pertama);
+   baris cukup memuat 2+ aksi; mendukung label reaksi baru
+   ("beri reaksi"/"react").
+3. Re-dock watcher chip: MutationObserver document.body dengan coalescing
+   timer 800 ms yang TIDAK di-reset tiap mutasi → chip yang terlepas (React
+   re-render: buka komentar, scroll, like) selalu terpasang kembali, tanpa
+   polling dan tanpa beban (callback O(1) saat timer aktif).
+4. Chip tidak memecah layout baris: order: 99 saat parent flex (selalu paling
+   kanan), dimensi button dikunci min/max 36 px, box-sizing: border-box +
+   overflow: visible eksplisit.
+
+### Validasi
+- npm run check Syntax OK · npm test 74/74 · npm run build OK
+- Marker di dist/: forum — ikon sama dengan FAB x1, chipTimer x4,
+  actionLabel x1, score >= 2 x1, order: 99 x1, max-width: 36px x1.
+
+### Verifikasi lapangan wajib user
+1. Buka post di feed & permalink → chip muncul di bar Like/Comment/Share,
+   ikon obrolan (forum) sama dengan FAB, tidak menggeser tombol FB.
+2. Scroll feed / buka komentar / like → chip tetap ada (tidak hilang) dan
+   pindah ke post yang sedang dilihat.
+3. Post dengan ikon aksi tanpa label (layout baru) → chip tetap ter-dock
+   benar.
+
+### Catatan
+- Tidak ada blok marker yang tersentuh — fixture test tetap hijau (74/74).
+- Bila chip masih terlihat salah di lapangan, lampirkan screenshot + versi
+   layout Facebook (baris aksi berlabel / ikon-only / posisi baru) agar
+   selektor bisa dipersempit.
